@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
-from app.security import detect_prompt_injection
+from app.security import detect_prompt_injection, verify_api_key
 
 app = FastAPI(
     title="Enterprise LLM Security Gateway",
@@ -29,7 +29,13 @@ def health_check():
     }
 
 @app.post("/chat")
-def chat(request: ChatRequest):
+def chat(request: ChatRequest, x_api_key: str | None = Header(default=None)):
+
+    if not x_api_key or not verify_api_key(x_api_key):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key",
+        )
 
     if detect_prompt_injection(request.prompt):
         raise HTTPException(

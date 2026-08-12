@@ -1,5 +1,5 @@
 import logging
-
+import os
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,3 +31,10 @@ def detect_prompt_injection(prompt: str) -> bool:
             return True
 
     return False
+
+
+API_KEY = os.getenv("LLM_GATEWAY_API_KEY", "dev-secret-key")
+
+
+def verify_api_key(api_key: str) -> bool:
+    return api_key == API_KEY
