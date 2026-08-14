@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Header
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.security import detect_prompt_injection, verify_api_key
 from app.rate_limit import is_rate_limited
 
@@ -11,7 +11,12 @@ app = FastAPI(
 
 
 class ChatRequest(BaseModel):
-    prompt: str
+    prompt: str = Field(
+        ...,
+        min_length=1,
+        max_length=4000,
+        description="User prompt for the LLM",
+    )
 
 
 @app.get("/")
