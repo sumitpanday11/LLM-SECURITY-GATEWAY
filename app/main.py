@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Request
 from pydantic import BaseModel, Field
 from app.security import detect_prompt_injection, verify_api_key
 from app.rate_limit import is_rate_limited
@@ -8,7 +8,15 @@ app = FastAPI(
     description="Secure proxy gateway for enterprise LLM and GenAI requests",
     version="0.1.0",
 )
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
 
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+
+    return response
 
 class ChatRequest(BaseModel):
     prompt: str = Field(
