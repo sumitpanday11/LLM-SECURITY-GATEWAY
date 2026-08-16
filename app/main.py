@@ -1,4 +1,6 @@
 from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi.middleware.cors import CORSMiddleware
+import os
 import logging
 from pydantic import BaseModel, Field
 from app.security import detect_prompt_injection, verify_api_key
@@ -8,6 +10,19 @@ app = FastAPI(
     title="Enterprise LLM Security Gateway",
     description="Secure proxy gateway for enterprise LLM and GenAI requests",
     version="0.1.0",
+)
+
+allowed_origins = os.getenv(
+    "CORS_ALLOWED_ORIGINS",
+    "http://localhost:3000,http://localhost:5173",
+).split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
 
 logger = logging.getLogger("llm-security-gateway")
