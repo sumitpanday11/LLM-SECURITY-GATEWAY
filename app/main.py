@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import logging
+import uuid
 from pydantic import BaseModel, Field
 from app.security import detect_prompt_injection, verify_api_key
 from app.rate_limit import is_rate_limited
@@ -26,6 +27,32 @@ app.add_middleware(
 )
 
 logger = logging.getLogger("llm-security-gateway")
+
+
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+
+    request.state.request_id = request_id
+
+    logger.info(
+        "Request started | request_id=%s | method=%s | path=%s",
+        request_id,
+        request.method,
+        request.url.path,
+    )
+
+    response = await call_next(request)
+
+    response.headers["X-Request-ID"] = request_id
+
+    logger.info(
+        "Request completed | request_id=%s | status_code=%s",
+        request_id,
+        response.status_code,
+    )
+
+    return response
 
 
 @app.middleware("http")
@@ -69,31 +96,46 @@ def chat(
     request: ChatRequest,
     x_api_key: str | None = Header(default=None),
 ):
+    request_id = request.state.request_id
+
     if not x_api_key or not verify_api_key(x_api_key):
-        logger.warning("Unauthorized request: invalid or missing API key")
+        logger.warning(
+            "Unauthorized request | request_id=%s",
+            request_id,
+        )
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing API key",
         )
 
     if is_rate_limited(x_api_key):
-        logger.warning("Rate limit exceeded for API key")
+        logger.warning(
+            "Rate limit exceeded | request_id=%s",
+            request_id,
+        )
         raise HTTPException(
             status_code=429,
             detail="Too many requests. Please try again later.",
         )
 
     if detect_prompt_injection(request.prompt):
-        logger.warning("Request blocked: prompt injection detected")
+        logger.warning(
+            "Prompt injection detected | request_id=%s",
+            request_id,
+        )
         raise HTTPException(
             status_code=403,
             detail="Potential prompt injection detected",
         )
 
-    logger.info("Request accepted successfully")
+    logger.info(
+        "Request accepted successfully | request_id=%s",
+        request_id,
+    )
 
     return {
         "blocked": False,
         "prompt": request.prompt,
         "message": "Request received by LLM Security Gateway",
+        "request_id": request_id,
     }
