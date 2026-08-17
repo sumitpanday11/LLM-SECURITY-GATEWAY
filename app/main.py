@@ -31,6 +31,48 @@ logger = logging.getLogger("llm-security-gateway")
 
 
 @app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+
+    return response
+
+
+@app.middleware("http")
+async def enforce_content_type(request: Request, call_next):
+    if request.method == "POST" and request.url.path == "/chat":
+        content_type = (
+            request.headers.get("content-type", "")
+            .split(";")[0]
+            .strip()
+            .lower()
+        )
+
+        if content_type != "application/json":
+            request_id = getattr(request.state, "request_id", "unknown")
+
+            logger.warning(
+                "Invalid content type | request_id=%s | content_type=%s",
+                request_id,
+                content_type,
+            )
+
+            return JSONResponse(
+                status_code=415,
+                content={
+                    "error": "Unsupported Media Type",
+                    "message": "Content-Type must be application/json",
+                    "request_id": request_id,
+                },
+            )
+
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def add_request_id(request: Request, call_next):
     request_id = str(uuid.uuid4())
 
@@ -52,17 +94,6 @@ async def add_request_id(request: Request, call_next):
         request_id,
         response.status_code,
     )
-
-    return response
-
-
-@app.middleware("http")
-async def add_security_headers(request: Request, call_next):
-    response = await call_next(request)
-
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "no-referrer"
 
     return response
 
@@ -108,12 +139,13 @@ def health_check():
     return {
         "status": "healthy",
         "service": "llm-security-gateway",
-    } 
+    }
 
 
 @app.post("/chat")
 def chat(
-    request: ChatRequest,
+    request: Request,
+    chat_request: ChatRequest,
     x_api_key: str | None = Header(default=None),
 ):
     request_id = request.state.request_id
@@ -138,7 +170,7 @@ def chat(
             detail="Too many requests. Please try again later.",
         )
 
-    if detect_prompt_injection(request.prompt):
+    if detect_prompt_injection(chat_request.prompt):
         logger.warning(
             "Prompt injection detected | request_id=%s",
             request_id,
@@ -155,7 +187,7 @@ def chat(
 
     return {
         "blocked": False,
-        "prompt": request.prompt,
+        "prompt": chat_request.prompt,
         "message": "Request received by LLM Security Gateway",
         "request_id": request_id,
     }
