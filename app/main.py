@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import os
 import logging
 import uuid
@@ -66,6 +67,25 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    request_id = getattr(request.state, "request_id", "unknown")
+
+    logger.exception(
+        "Unhandled exception | request_id=%s | path=%s",
+        request_id,
+        request.url.path,
+    )
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "request_id": request_id,
+        },
+    )
+
+
 class ChatRequest(BaseModel):
     prompt: str = Field(
         ...,
@@ -88,7 +108,7 @@ def health_check():
     return {
         "status": "healthy",
         "service": "llm-security-gateway",
-    }
+    } 
 
 
 @app.post("/chat")
