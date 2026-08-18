@@ -30,6 +30,41 @@ app.add_middleware(
 logger = logging.getLogger("llm-security-gateway")
 
 
+MAX_REQUEST_SIZE = 1024 * 1024  # 1 MB
+
+
+@app.middleware("http")
+async def enforce_request_size(request: Request, call_next):
+    if request.method == "POST" and request.url.path == "/chat":
+        content_length = request.headers.get("content-length")
+
+        if content_length:
+            try:
+                request_size = int(content_length)
+            except ValueError:
+                request_size = 0
+
+            if request_size > MAX_REQUEST_SIZE:
+                request_id = getattr(request.state, "request_id", "unknown")
+
+                logger.warning(
+                    "Request body too large | request_id=%s | content_length=%s",
+                    request_id,
+                    content_length,
+                )
+
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "error": "Payload Too Large",
+                        "message": "Request body must not exceed 1 MB",
+                        "request_id": request_id,
+                    },
+                )
+
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
