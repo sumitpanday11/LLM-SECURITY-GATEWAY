@@ -1,5 +1,6 @@
 import logging
 import os
+import secrets
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,4 +38,4 @@ API_KEY = os.getenv("LLM_GATEWAY_API_KEY", "dev-secret-key")
 
 
 def verify_api_key(api_key: str) -> bool:
-    return api_key == API_KEY
+    return secrets.compare_digest(api_key, API_KEY)
