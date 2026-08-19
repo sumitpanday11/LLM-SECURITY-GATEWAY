@@ -6,8 +6,11 @@ import logging
 import uuid
 import asyncio
 from pydantic import BaseModel, Field
+
 from app.security import detect_prompt_injection, verify_api_key
 from app.rate_limit import is_rate_limited
+from app.audit_log import log_security_event
+
 
 app = FastAPI(
     title="Enterprise LLM Security Gateway",
@@ -15,10 +18,12 @@ app = FastAPI(
     version="0.1.0",
 )
 
+
 allowed_origins = os.getenv(
     "CORS_ALLOWED_ORIGINS",
     "http://localhost:3000,http://localhost:5173",
 ).split(",")
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,6 +32,7 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type", "X-API-Key"],
 )
+
 
 logger = logging.getLogger("llm-security-gateway")
 
@@ -47,12 +53,22 @@ async def enforce_request_size(request: Request, call_next):
                 request_size = 0
 
             if request_size > MAX_REQUEST_SIZE:
-                request_id = getattr(request.state, "request_id", "unknown")
+                request_id = getattr(
+                    request.state,
+                    "request_id",
+                    "unknown",
+                )
 
                 logger.warning(
                     "Request body too large | request_id=%s | content_length=%s",
                     request_id,
                     content_length,
+                )
+
+                log_security_event(
+                    event="PAYLOAD_TOO_LARGE",
+                    request_id=request_id,
+                    details="Request body exceeded 1 MB limit",
                 )
 
                 return JSONResponse(
@@ -90,12 +106,22 @@ async def enforce_content_type(request: Request, call_next):
         )
 
         if content_type != "application/json":
-            request_id = getattr(request.state, "request_id", "unknown")
+            request_id = getattr(
+                request.state,
+                "request_id",
+                "unknown",
+            )
 
             logger.warning(
                 "Invalid content type | request_id=%s | content_type=%s",
                 request_id,
                 content_type,
+            )
+
+            log_security_event(
+                event="INVALID_CONTENT_TYPE",
+                request_id=request_id,
+                details="Content-Type must be application/json",
             )
 
             return JSONResponse(
@@ -144,13 +170,24 @@ async def enforce_request_timeout(request: Request, call_next):
                 call_next(request),
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
+
         except asyncio.TimeoutError:
-            request_id = getattr(request.state, "request_id", "unknown")
+            request_id = getattr(
+                request.state,
+                "request_id",
+                "unknown",
+            )
 
             logger.warning(
                 "Request timeout | request_id=%s | timeout=%ss",
                 request_id,
                 REQUEST_TIMEOUT_SECONDS,
+            )
+
+            log_security_event(
+                event="REQUEST_TIMEOUT",
+                request_id=request_id,
+                details="Request processing exceeded 10 seconds",
             )
 
             return JSONResponse(
@@ -166,13 +203,26 @@ async def enforce_request_timeout(request: Request, call_next):
 
 
 @app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    request_id = getattr(request.state, "request_id", "unknown")
+async def global_exception_handler(
+    request: Request,
+    exc: Exception,
+):
+    request_id = getattr(
+        request.state,
+        "request_id",
+        "unknown",
+    )
 
     logger.exception(
         "Unhandled exception | request_id=%s | path=%s",
         request_id,
         request.url.path,
+    )
+
+    log_security_event(
+        event="UNHANDLED_EXCEPTION",
+        request_id=request_id,
+        details="Internal server error",
     )
 
     return JSONResponse(
@@ -222,6 +272,13 @@ def chat(
             "Unauthorized request | request_id=%s",
             request_id,
         )
+
+        log_security_event(
+            event="UNAUTHORIZED_REQUEST",
+            request_id=request_id,
+            details="Invalid or missing API key",
+        )
+
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing API key",
@@ -232,6 +289,13 @@ def chat(
             "Rate limit exceeded | request_id=%s",
             request_id,
         )
+
+        log_security_event(
+            event="RATE_LIMIT_EXCEEDED",
+            request_id=request_id,
+            details="API request limit exceeded",
+        )
+
         raise HTTPException(
             status_code=429,
             detail="Too many requests. Please try again later.",
@@ -242,6 +306,13 @@ def chat(
             "Prompt injection detected | request_id=%s",
             request_id,
         )
+
+        log_security_event(
+            event="PROMPT_INJECTION_DETECTED",
+            request_id=request_id,
+            details="Potential prompt injection detected",
+        )
+
         raise HTTPException(
             status_code=403,
             detail="Potential prompt injection detected",
@@ -250,6 +321,12 @@ def chat(
     logger.info(
         "Request accepted successfully | request_id=%s",
         request_id,
+    )
+
+    log_security_event(
+        event="REQUEST_ACCEPTED",
+        request_id=request_id,
+        details="Chat request passed security checks",
     )
 
     return {
