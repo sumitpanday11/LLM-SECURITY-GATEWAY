@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 import os
 import logging
 import uuid
+import asyncio
 from pydantic import BaseModel, Field
 from app.security import detect_prompt_injection, verify_api_key
 from app.rate_limit import is_rate_limited
@@ -31,6 +32,7 @@ logger = logging.getLogger("llm-security-gateway")
 
 
 MAX_REQUEST_SIZE = 1024 * 1024  # 1 MB
+REQUEST_TIMEOUT_SECONDS = 10
 
 
 @app.middleware("http")
@@ -73,7 +75,7 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Cache-Control"] = "no-store"
-    
+
     return response
 
 
@@ -132,6 +134,35 @@ async def add_request_id(request: Request, call_next):
     )
 
     return response
+
+
+@app.middleware("http")
+async def enforce_request_timeout(request: Request, call_next):
+    if request.method == "POST" and request.url.path == "/chat":
+        try:
+            return await asyncio.wait_for(
+                call_next(request),
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            request_id = getattr(request.state, "request_id", "unknown")
+
+            logger.warning(
+                "Request timeout | request_id=%s | timeout=%ss",
+                request_id,
+                REQUEST_TIMEOUT_SECONDS,
+            )
+
+            return JSONResponse(
+                status_code=504,
+                content={
+                    "error": "Gateway Timeout",
+                    "message": "Request processing exceeded the allowed time",
+                    "request_id": request_id,
+                },
+            )
+
+    return await call_next(request)
 
 
 @app.exception_handler(Exception)
