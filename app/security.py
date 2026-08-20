@@ -1,6 +1,8 @@
 import logging
 import os
 import secrets
+from typing import Dict
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,8 +36,46 @@ def detect_prompt_injection(prompt: str) -> bool:
     return False
 
 
-API_KEY = os.getenv("LLM_GATEWAY_API_KEY", "dev-secret-key")
+# API Key Management
+API_KEYS: Dict[str, bool] = {
+    os.getenv("LLM_GATEWAY_API_KEY", "dev-secret-key"): True,
+}
 
 
 def verify_api_key(api_key: str) -> bool:
-    return secrets.compare_digest(api_key, API_KEY)
+    if not api_key:
+        return False
+
+    for stored_key, is_active in API_KEYS.items():
+        if secrets.compare_digest(api_key, stored_key):
+            return is_active
+
+    return False
+
+
+def generate_api_key() -> str:
+    return f"llm_{secrets.token_urlsafe(32)}"
+
+
+def add_api_key(api_key: str) -> None:
+    API_KEYS[api_key] = True
+
+
+def revoke_api_key(api_key: str) -> bool:
+    if api_key in API_KEYS:
+        API_KEYS[api_key] = False
+        logger.warning("API key revoked")
+        return True
+
+    return False
+
+
+def rotate_api_key(old_api_key: str) -> str | None:
+    if not revoke_api_key(old_api_key):
+        return None
+
+    new_api_key = generate_api_key()
+    add_api_key(new_api_key)
+
+    logger.info("API key rotated successfully")
+    return new_api_key

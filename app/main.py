@@ -7,7 +7,14 @@ import uuid
 import asyncio
 from pydantic import BaseModel, Field
 
-from app.security import detect_prompt_injection, verify_api_key
+from app.security import (
+    detect_prompt_injection,
+    verify_api_key,
+    generate_api_key,
+    add_api_key,
+    revoke_api_key,
+    rotate_api_key,
+)
 from app.rate_limit import is_rate_limited
 from app.audit_log import log_security_event
 
@@ -15,7 +22,7 @@ from app.audit_log import log_security_event
 app = FastAPI(
     title="Enterprise LLM Security Gateway",
     description="Secure proxy gateway for enterprise LLM and GenAI requests",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 
@@ -37,7 +44,7 @@ app.add_middleware(
 logger = logging.getLogger("llm-security-gateway")
 
 
-MAX_REQUEST_SIZE = 1024 * 1024  # 1 MB
+MAX_REQUEST_SIZE = 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 10
 
 
@@ -139,7 +146,6 @@ async def enforce_content_type(request: Request, call_next):
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
     request_id = str(uuid.uuid4())
-
     request.state.request_id = request_id
 
     logger.info(
@@ -203,15 +209,8 @@ async def enforce_request_timeout(request: Request, call_next):
 
 
 @app.exception_handler(Exception)
-async def global_exception_handler(
-    request: Request,
-    exc: Exception,
-):
-    request_id = getattr(
-        request.state,
-        "request_id",
-        "unknown",
-    )
+async def global_exception_handler(request: Request, exc: Exception):
+    request_id = getattr(request.state, "request_id", "unknown")
 
     logger.exception(
         "Unhandled exception | request_id=%s | path=%s",
@@ -243,11 +242,15 @@ class ChatRequest(BaseModel):
     )
 
 
+class RotateKeyRequest(BaseModel):
+    old_api_key: str = Field(..., min_length=1)
+
+
 @app.get("/")
 def root():
     return {
         "message": "LLM Security Gateway is running",
-        "version": "0.1.0",
+        "version": "0.2.0",
     }
 
 
@@ -256,6 +259,102 @@ def health_check():
     return {
         "status": "healthy",
         "service": "llm-security-gateway",
+    }
+
+
+@app.post("/keys/generate")
+def create_api_key(
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+):
+    request_id = request.state.request_id
+
+    if not x_api_key or not verify_api_key(x_api_key):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key",
+        )
+
+    new_api_key = generate_api_key()
+    add_api_key(new_api_key)
+
+    log_security_event(
+        event="API_KEY_GENERATED",
+        request_id=request_id,
+        details="New API key generated",
+    )
+
+    return {
+        "message": "API key generated successfully",
+        "api_key": new_api_key,
+        "request_id": request_id,
+    }
+
+
+@app.post("/keys/revoke")
+def revoke_key(
+    request: Request,
+    old_api_key: str,
+    x_api_key: str | None = Header(default=None),
+):
+    request_id = request.state.request_id
+
+    if not x_api_key or not verify_api_key(x_api_key):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key",
+        )
+
+    if not revoke_api_key(old_api_key):
+        raise HTTPException(
+            status_code=404,
+            detail="API key not found",
+        )
+
+    log_security_event(
+        event="API_KEY_REVOKED",
+        request_id=request_id,
+        details="API key revoked",
+    )
+
+    return {
+        "message": "API key revoked successfully",
+        "request_id": request_id,
+    }
+
+
+@app.post("/keys/rotate")
+def rotate_key(
+    request: Request,
+    rotate_request: RotateKeyRequest,
+    x_api_key: str | None = Header(default=None),
+):
+    request_id = request.state.request_id
+
+    if not x_api_key or not verify_api_key(x_api_key):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key",
+        )
+
+    new_api_key = rotate_api_key(rotate_request.old_api_key)
+
+    if new_api_key is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Old API key not found",
+        )
+
+    log_security_event(
+        event="API_KEY_ROTATED",
+        request_id=request_id,
+        details="API key rotated successfully",
+    )
+
+    return {
+        "message": "API key rotated successfully",
+        "new_api_key": new_api_key,
+        "request_id": request_id,
     }
 
 
