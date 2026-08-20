@@ -5,6 +5,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict
 
+from app.api_key_store import (
+    get_api_key,
+    save_api_key,
+    update_api_key_status,
+)
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,9 +58,16 @@ def verify_api_key(api_key: str) -> bool:
     if not api_key:
         return False
 
-    for stored_key, metadata in API_KEYS.items():
+    # First check Redis for persistent API keys.
+    metadata = get_api_key(api_key)
+
+    if metadata is not None:
+        return bool(metadata.get("active", False))
+
+    # Keep the default environment API key working.
+    for stored_key, local_metadata in API_KEYS.items():
         if secrets.compare_digest(api_key, stored_key):
-            return bool(metadata["active"])
+            return bool(local_metadata["active"])
 
     return False
 
@@ -64,14 +77,45 @@ def generate_api_key() -> str:
 
 
 def add_api_key(api_key: str) -> None:
+    key_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc).isoformat()
+
     API_KEYS[api_key] = {
-        "key_id": str(uuid.uuid4()),
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "key_id": key_id,
+        "created_at": created_at,
         "active": True,
     }
 
+    save_api_key(
+        api_key=api_key,
+        key_id=key_id,
+        created_at=created_at,
+        active=True,
+    )
+
+    logger.info(
+        "API key added | key_id=%s",
+        key_id,
+    )
+
 
 def revoke_api_key(api_key: str) -> bool:
+    metadata = get_api_key(api_key)
+
+    if metadata is not None:
+        if not update_api_key_status(api_key, False):
+            return False
+
+        if api_key in API_KEYS:
+            API_KEYS[api_key]["active"] = False
+
+        logger.warning(
+            "API key revoked | key_id=%s",
+            metadata.get("key_id"),
+        )
+
+        return True
+
     if api_key in API_KEYS:
         API_KEYS[api_key]["active"] = False
 
@@ -92,22 +136,33 @@ def rotate_api_key(old_api_key: str) -> str | None:
     new_api_key = generate_api_key()
     add_api_key(new_api_key)
 
+    metadata = get_api_key(new_api_key)
+
     logger.info(
         "API key rotated successfully | new_key_id=%s",
-        API_KEYS[new_api_key]["key_id"],
+        metadata.get("key_id") if metadata else "unknown",
     )
 
     return new_api_key
 
 
 def get_api_key_metadata(api_key: str) -> dict | None:
-    metadata = API_KEYS.get(api_key)
+    metadata = get_api_key(api_key)
 
-    if metadata is None:
+    if metadata is not None:
+        return {
+            "key_id": metadata.get("key_id"),
+            "created_at": metadata.get("created_at"),
+            "active": metadata.get("active"),
+        }
+
+    local_metadata = API_KEYS.get(api_key)
+
+    if local_metadata is None:
         return None
 
     return {
-        "key_id": metadata["key_id"],
-        "created_at": metadata["created_at"],
-        "active": metadata["active"],
+        "key_id": local_metadata["key_id"],
+        "created_at": local_metadata["created_at"],
+        "active": local_metadata["active"],
     }
