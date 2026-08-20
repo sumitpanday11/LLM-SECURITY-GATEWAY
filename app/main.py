@@ -14,6 +14,7 @@ from app.security import (
     add_api_key,
     revoke_api_key,
     rotate_api_key,
+    get_api_key_metadata,
 )
 from app.rate_limit import is_rate_limited
 from app.audit_log import log_security_event
@@ -146,6 +147,7 @@ async def enforce_content_type(request: Request, call_next):
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
     request_id = str(uuid.uuid4())
+
     request.state.request_id = request_id
 
     logger.info(
@@ -209,8 +211,15 @@ async def enforce_request_timeout(request: Request, call_next):
 
 
 @app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    request_id = getattr(request.state, "request_id", "unknown")
+async def global_exception_handler(
+    request: Request,
+    exc: Exception,
+):
+    request_id = getattr(
+        request.state,
+        "request_id",
+        "unknown",
+    )
 
     logger.exception(
         "Unhandled exception | request_id=%s | path=%s",
@@ -259,6 +268,41 @@ def health_check():
     return {
         "status": "healthy",
         "service": "llm-security-gateway",
+    }
+
+
+@app.get("/keys/info")
+def get_key_info(
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+):
+    request_id = request.state.request_id
+
+    if not x_api_key or not verify_api_key(x_api_key):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key",
+        )
+
+    metadata = get_api_key_metadata(x_api_key)
+
+    if metadata is None:
+        raise HTTPException(
+            status_code=404,
+            detail="API key not found",
+        )
+
+    log_security_event(
+        event="API_KEY_INFO_ACCESSED",
+        request_id=request_id,
+        details="API key metadata accessed",
+    )
+
+    return {
+        "key_id": metadata["key_id"],
+        "created_at": metadata["created_at"],
+        "active": metadata["active"],
+        "request_id": request_id,
     }
 
 
