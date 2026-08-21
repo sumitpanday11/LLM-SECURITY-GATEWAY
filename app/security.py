@@ -21,6 +21,10 @@ logging.basicConfig(
 logger = logging.getLogger("llm-security-gateway")
 
 
+# ============================================================
+# Prompt Injection Detection
+# ============================================================
+
 SUSPICIOUS_PATTERNS = [
     "ignore previous instructions",
     "ignore all previous instructions",
@@ -45,7 +49,10 @@ def detect_prompt_injection(prompt: str) -> bool:
     return False
 
 
-# PII Detection Patterns
+# ============================================================
+# PII Detection
+# ============================================================
+
 PII_PATTERNS = {
     "EMAIL": re.compile(
         r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
@@ -55,13 +62,12 @@ PII_PATTERNS = {
         r"(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d)"
     ),
 
-    # Supports:
+    # Aadhaar:
     # 123456789012
     # 1234 5678 9012
     # 1234-5678-9012
     #
-    # Prevents matching the last 12 digits of a 16-digit
-    # card number such as:
+    # Prevents matching part of:
     # 4111 1111 1111 1111
     "AADHAAR": re.compile(
         r"(?<!\d)(?<!\d[\s-])"
@@ -107,8 +113,7 @@ def redact_pii(prompt: str) -> str:
         "CARD": "[REDACTED_CARD]",
     }
 
-    # Card is processed before Aadhaar so that a 16-digit
-    # card number is never partially redacted as Aadhaar.
+    # Card before Aadhaar prevents partial card matching.
     ordered_patterns = [
         "EMAIL",
         "PHONE",
@@ -118,9 +123,7 @@ def redact_pii(prompt: str) -> str:
     ]
 
     for pii_type in ordered_patterns:
-        pattern = PII_PATTERNS[pii_type]
-
-        redacted_prompt = pattern.sub(
+        redacted_prompt = PII_PATTERNS[pii_type].sub(
             replacements[pii_type],
             redacted_prompt,
         )
@@ -128,7 +131,87 @@ def redact_pii(prompt: str) -> str:
     return redacted_prompt
 
 
+# ============================================================
+# PHI Detection
+# ============================================================
+
+PHI_PATTERNS = {
+    "MEDICAL_RECORD_ID": re.compile(
+        r"\b(?:MRN|Medical\s+Record(?:\s+Number)?|"
+        r"Patient\s+Record(?:\s+ID)?)"
+        r"\s*(?:is|=|:|#|-)?\s*"
+        r"[A-Z0-9-]{4,20}\b",
+        re.IGNORECASE,
+    ),
+
+    "INSURANCE_ID": re.compile(
+        r"\b(?:Insurance\s+(?:ID|Number)|"
+        r"Policy\s+(?:ID|Number))"
+        r"\s*(?:is|=|:|#|-)?\s*"
+        r"[A-Z0-9-]{4,25}\b",
+        re.IGNORECASE,
+    ),
+
+    "PRESCRIPTION_ID": re.compile(
+        r"\b(?:Prescription|Rx)"
+        r"(?:\s+(?:ID|Number|No\.?))?"
+        r"\s*(?:is|=|:|#|-)?\s*"
+        r"[A-Z0-9-]{3,20}\b",
+        re.IGNORECASE,
+    ),
+
+    "DATE_OF_BIRTH": re.compile(
+        r"\b(?:DOB|Date\s+of\s+Birth)"
+        r"\s*(?:is|=|:|#|-)?\s*"
+        r"(?:"
+        r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"
+        r"|"
+        r"\d{4}[/-]\d{1,2}[/-]\d{1,2}"
+        r")\b",
+        re.IGNORECASE,
+    ),
+}
+
+
+def detect_phi(prompt: str) -> list[str]:
+    detected_types = []
+
+    for phi_type, pattern in PHI_PATTERNS.items():
+        if pattern.search(prompt):
+            detected_types.append(phi_type)
+
+    if detected_types:
+        logger.warning(
+            "PHI detected | types=%s",
+            ",".join(detected_types),
+        )
+
+    return detected_types
+
+
+def redact_phi(prompt: str) -> str:
+    redacted_prompt = prompt
+
+    replacements = {
+        "MEDICAL_RECORD_ID": "[REDACTED_MEDICAL_RECORD_ID]",
+        "INSURANCE_ID": "[REDACTED_INSURANCE_ID]",
+        "PRESCRIPTION_ID": "[REDACTED_PRESCRIPTION_ID]",
+        "DATE_OF_BIRTH": "[REDACTED_DATE_OF_BIRTH]",
+    }
+
+    for phi_type, pattern in PHI_PATTERNS.items():
+        redacted_prompt = pattern.sub(
+            replacements[phi_type],
+            redacted_prompt,
+        )
+
+    return redacted_prompt
+
+
+# ============================================================
 # API Key Management
+# ============================================================
+
 API_KEYS: Dict[str, Dict[str, object]] = {
     os.getenv("LLM_GATEWAY_API_KEY", "dev-secret-key"): {
         "key_id": "default",

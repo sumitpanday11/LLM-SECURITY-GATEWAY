@@ -11,6 +11,8 @@ from app.security import (
     detect_prompt_injection,
     detect_pii,
     redact_pii,
+    detect_phi,
+    redact_phi,
     verify_api_key,
     generate_api_key,
     add_api_key,
@@ -419,6 +421,10 @@ def chat(
 
     client_id = request.client.host if request.client else "unknown"
 
+    # ========================================================
+    # Authentication Protection
+    # ========================================================
+
     if is_auth_blocked(client_id):
         logger.warning(
             "Authentication temporarily blocked | request_id=%s | client_id=%s",
@@ -464,6 +470,10 @@ def chat(
 
     clear_failed_attempts(client_id)
 
+    # ========================================================
+    # Rate Limiting
+    # ========================================================
+
     if is_rate_limited(x_api_key):
         logger.warning(
             "Rate limit exceeded | request_id=%s",
@@ -481,7 +491,10 @@ def chat(
             detail="Too many requests. Please try again later.",
         )
 
+    # ========================================================
     # PII Detection and Redaction
+    # ========================================================
+
     detected_pii = detect_pii(chat_request.prompt)
 
     if detected_pii:
@@ -497,12 +510,40 @@ def chat(
             details=f"PII detected: {','.join(detected_pii)}",
         )
 
-        sanitized_prompt = redact_pii(chat_request.prompt)
+        sanitized_prompt = redact_pii(
+            chat_request.prompt
+        )
 
     else:
         sanitized_prompt = chat_request.prompt
 
+    # ========================================================
+    # PHI Detection and Redaction
+    # ========================================================
+
+    detected_phi = detect_phi(sanitized_prompt)
+
+    if detected_phi:
+        logger.warning(
+            "PHI detected | request_id=%s | types=%s",
+            request_id,
+            ",".join(detected_phi),
+        )
+
+        log_security_event(
+            event="PHI_DETECTED",
+            request_id=request_id,
+            details=f"PHI detected: {','.join(detected_phi)}",
+        )
+
+        sanitized_prompt = redact_phi(
+            sanitized_prompt
+        )
+
+    # ========================================================
     # Prompt Injection Detection
+    # ========================================================
+
     if detect_prompt_injection(sanitized_prompt):
         logger.warning(
             "Prompt injection detected | request_id=%s",
@@ -519,6 +560,10 @@ def chat(
             status_code=403,
             detail="Potential prompt injection detected",
         )
+
+    # ========================================================
+    # Request Accepted
+    # ========================================================
 
     logger.info(
         "Request accepted successfully | request_id=%s",
@@ -537,4 +582,3 @@ def chat(
         "message": "Request received by LLM Security Gateway",
         "request_id": request_id,
     }
-    
