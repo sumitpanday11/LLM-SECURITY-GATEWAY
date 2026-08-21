@@ -35,11 +35,13 @@ from app.audit_log import log_security_event
 
 from app.threat_intelligence import is_ip_threatened
 
+from app.output_filter import filter_unsafe_output
+
 
 app = FastAPI(
     title="Enterprise LLM Security Gateway",
     description="Secure proxy gateway for enterprise LLM and GenAI requests",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 
@@ -57,7 +59,6 @@ allowed_origins = [
     for origin in allowed_origins
     if origin.strip()
 ]
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -94,7 +95,6 @@ async def enforce_request_size(request: Request, call_next):
 
             try:
                 request_size = int(content_length)
-
             except ValueError:
                 request_size = 0
 
@@ -342,7 +342,7 @@ def root():
 
     return {
         "message": "LLM Security Gateway is running",
-        "version": "0.2.0",
+        "version": "0.3.0",
     }
 
 
@@ -744,7 +744,43 @@ def chat(
 
 
     # ========================================================
-    # 8. REQUEST ACCEPTED
+    # 8. SIMULATED LLM OUTPUT
+    # ========================================================
+
+    llm_output = (
+        "Request processed successfully. "
+        "The gateway did not expose any internal credentials."
+    )
+
+
+    # ========================================================
+    # 9. UNSAFE OUTPUT FILTERING
+    # ========================================================
+
+    sanitized_output, detected_output_threats = (
+        filter_unsafe_output(llm_output)
+    )
+
+    if detected_output_threats:
+
+        logger.warning(
+            "Unsafe output detected | request_id=%s | types=%s",
+            request_id,
+            ",".join(detected_output_threats),
+        )
+
+        log_security_event(
+            event="UNSAFE_OUTPUT_DETECTED",
+            request_id=request_id,
+            details=(
+                f"Unsafe output detected: "
+                f"{','.join(detected_output_threats)}"
+            ),
+        )
+
+
+    # ========================================================
+    # 10. REQUEST ACCEPTED
     # ========================================================
 
     logger.info(
@@ -762,6 +798,8 @@ def chat(
     return {
         "blocked": False,
         "prompt": sanitized_prompt,
-        "message": "Request received by LLM Security Gateway",
+        "output": sanitized_output,
+        "output_threats": detected_output_threats,
+        "message": "Request processed by LLM Security Gateway",
         "request_id": request_id,
     }
