@@ -17,6 +17,11 @@ from app.security import (
     get_api_key_metadata,
 )
 from app.rate_limit import is_rate_limited
+from app.auth_protection import (
+    is_auth_blocked,
+    record_failed_attempt,
+    clear_failed_attempts,
+)
 from app.audit_log import log_security_event
 
 
@@ -410,7 +415,29 @@ def chat(
 ):
     request_id = request.state.request_id
 
+    client_id = request.client.host if request.client else "unknown"
+
+    if is_auth_blocked(client_id):
+        logger.warning(
+            "Authentication temporarily blocked | request_id=%s | client_id=%s",
+            request_id,
+            client_id,
+        )
+
+        log_security_event(
+            event="AUTHENTICATION_BLOCKED",
+            request_id=request_id,
+            details="Too many failed API key attempts",
+        )
+
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed authentication attempts. Please try again later.",
+        )
+
     if not x_api_key or not verify_api_key(x_api_key):
+        blocked = record_failed_attempt(client_id)
+
         logger.warning(
             "Unauthorized request | request_id=%s",
             request_id,
@@ -422,10 +449,18 @@ def chat(
             details="Invalid or missing API key",
         )
 
+        if blocked:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many failed authentication attempts. Please try again later.",
+            )
+
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing API key",
         )
+
+    clear_failed_attempts(client_id)
 
     if is_rate_limited(x_api_key):
         logger.warning(
