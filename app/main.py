@@ -1,10 +1,12 @@
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import os
-import logging
-import uuid
+
 import asyncio
+import logging
+import os
+import uuid
+
 from pydantic import BaseModel, Field
 
 from app.security import (
@@ -20,13 +22,18 @@ from app.security import (
     rotate_api_key,
     get_api_key_metadata,
 )
+
 from app.rate_limit import is_rate_limited
+
 from app.auth_protection import (
     is_auth_blocked,
     record_failed_attempt,
     clear_failed_attempts,
 )
+
 from app.audit_log import log_security_event
+
+from app.threat_intelligence import is_ip_threatened
 
 
 app = FastAPI(
@@ -36,10 +43,20 @@ app = FastAPI(
 )
 
 
+# ============================================================
+# CORS SECURITY
+# ============================================================
+
 allowed_origins = os.getenv(
     "CORS_ALLOWED_ORIGINS",
     "http://localhost:3000,http://localhost:5173",
 ).split(",")
+
+allowed_origins = [
+    origin.strip()
+    for origin in allowed_origins
+    if origin.strip()
+]
 
 
 app.add_middleware(
@@ -54,22 +71,35 @@ app.add_middleware(
 logger = logging.getLogger("llm-security-gateway")
 
 
+# ============================================================
+# SECURITY CONFIGURATION
+# ============================================================
+
 MAX_REQUEST_SIZE = 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 10
 
 
+# ============================================================
+# REQUEST SIZE LIMIT
+# ============================================================
+
 @app.middleware("http")
 async def enforce_request_size(request: Request, call_next):
+
     if request.method == "POST" and request.url.path == "/chat":
+
         content_length = request.headers.get("content-length")
 
         if content_length:
+
             try:
                 request_size = int(content_length)
+
             except ValueError:
                 request_size = 0
 
             if request_size > MAX_REQUEST_SIZE:
+
                 request_id = getattr(
                     request.state,
                     "request_id",
@@ -100,8 +130,13 @@ async def enforce_request_size(request: Request, call_next):
     return await call_next(request)
 
 
+# ============================================================
+# SECURITY HEADERS
+# ============================================================
+
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+
     response = await call_next(request)
 
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -112,9 +147,15 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
+# ============================================================
+# CONTENT TYPE ENFORCEMENT
+# ============================================================
+
 @app.middleware("http")
 async def enforce_content_type(request: Request, call_next):
+
     if request.method == "POST" and request.url.path == "/chat":
+
         content_type = (
             request.headers.get("content-type", "")
             .split(";")[0]
@@ -123,6 +164,7 @@ async def enforce_content_type(request: Request, call_next):
         )
 
         if content_type != "application/json":
+
             request_id = getattr(
                 request.state,
                 "request_id",
@@ -153,8 +195,13 @@ async def enforce_content_type(request: Request, call_next):
     return await call_next(request)
 
 
+# ============================================================
+# REQUEST ID
+# ============================================================
+
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
+
     request_id = str(uuid.uuid4())
 
     request.state.request_id = request_id
@@ -179,16 +226,24 @@ async def add_request_id(request: Request, call_next):
     return response
 
 
+# ============================================================
+# REQUEST TIMEOUT
+# ============================================================
+
 @app.middleware("http")
 async def enforce_request_timeout(request: Request, call_next):
+
     if request.method == "POST" and request.url.path == "/chat":
+
         try:
+
             return await asyncio.wait_for(
                 call_next(request),
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
 
         except asyncio.TimeoutError:
+
             request_id = getattr(
                 request.state,
                 "request_id",
@@ -219,11 +274,16 @@ async def enforce_request_timeout(request: Request, call_next):
     return await call_next(request)
 
 
+# ============================================================
+# GLOBAL EXCEPTION HANDLER
+# ============================================================
+
 @app.exception_handler(Exception)
 async def global_exception_handler(
     request: Request,
     exc: Exception,
 ):
+
     request_id = getattr(
         request.state,
         "request_id",
@@ -251,7 +311,12 @@ async def global_exception_handler(
     )
 
 
+# ============================================================
+# REQUEST MODELS
+# ============================================================
+
 class ChatRequest(BaseModel):
+
     prompt: str = Field(
         ...,
         min_length=1,
@@ -261,33 +326,53 @@ class ChatRequest(BaseModel):
 
 
 class RotateKeyRequest(BaseModel):
-    old_api_key: str = Field(..., min_length=1)
 
+    old_api_key: str = Field(
+        ...,
+        min_length=1,
+    )
+
+
+# ============================================================
+# ROOT
+# ============================================================
 
 @app.get("/")
 def root():
+
     return {
         "message": "LLM Security Gateway is running",
         "version": "0.2.0",
     }
 
 
+# ============================================================
+# HEALTH
+# ============================================================
+
 @app.get("/health")
 def health_check():
+
     return {
         "status": "healthy",
         "service": "llm-security-gateway",
     }
 
 
+# ============================================================
+# API KEY INFORMATION
+# ============================================================
+
 @app.get("/keys/info")
 def get_key_info(
     request: Request,
     x_api_key: str | None = Header(default=None),
 ):
+
     request_id = request.state.request_id
 
     if not x_api_key or not verify_api_key(x_api_key):
+
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing API key",
@@ -296,6 +381,7 @@ def get_key_info(
     metadata = get_api_key_metadata(x_api_key)
 
     if metadata is None:
+
         raise HTTPException(
             status_code=404,
             detail="API key not found",
@@ -315,20 +401,27 @@ def get_key_info(
     }
 
 
+# ============================================================
+# API KEY GENERATION
+# ============================================================
+
 @app.post("/keys/generate")
 def create_api_key(
     request: Request,
     x_api_key: str | None = Header(default=None),
 ):
+
     request_id = request.state.request_id
 
     if not x_api_key or not verify_api_key(x_api_key):
+
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing API key",
         )
 
     new_api_key = generate_api_key()
+
     add_api_key(new_api_key)
 
     log_security_event(
@@ -344,21 +437,28 @@ def create_api_key(
     }
 
 
+# ============================================================
+# API KEY REVOCATION
+# ============================================================
+
 @app.post("/keys/revoke")
 def revoke_key(
     request: Request,
     old_api_key: str,
     x_api_key: str | None = Header(default=None),
 ):
+
     request_id = request.state.request_id
 
     if not x_api_key or not verify_api_key(x_api_key):
+
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing API key",
         )
 
     if not revoke_api_key(old_api_key):
+
         raise HTTPException(
             status_code=404,
             detail="API key not found",
@@ -376,23 +476,32 @@ def revoke_key(
     }
 
 
+# ============================================================
+# API KEY ROTATION
+# ============================================================
+
 @app.post("/keys/rotate")
 def rotate_key(
     request: Request,
     rotate_request: RotateKeyRequest,
     x_api_key: str | None = Header(default=None),
 ):
+
     request_id = request.state.request_id
 
     if not x_api_key or not verify_api_key(x_api_key):
+
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing API key",
         )
 
-    new_api_key = rotate_api_key(rotate_request.old_api_key)
+    new_api_key = rotate_api_key(
+        rotate_request.old_api_key
+    )
 
     if new_api_key is None:
+
         raise HTTPException(
             status_code=404,
             detail="Old API key not found",
@@ -411,21 +520,56 @@ def rotate_key(
     }
 
 
+# ============================================================
+# CHAT SECURITY PIPELINE
+# ============================================================
+
 @app.post("/chat")
 def chat(
     request: Request,
     chat_request: ChatRequest,
     x_api_key: str | None = Header(default=None),
 ):
+
     request_id = request.state.request_id
 
-    client_id = request.client.host if request.client else "unknown"
+    client_id = (
+        request.client.host
+        if request.client
+        else "unknown"
+    )
+
 
     # ========================================================
-    # Authentication Protection
+    # 1. THREAT INTELLIGENCE
+    # ========================================================
+
+    if is_ip_threatened(client_id):
+
+        logger.warning(
+            "Threat intelligence block | request_id=%s | client_ip=%s",
+            request_id,
+            client_id,
+        )
+
+        log_security_event(
+            event="THREAT_INTELLIGENCE_BLOCK",
+            request_id=request_id,
+            details="Client IP matched threat-intelligence blocklist",
+        )
+
+        raise HTTPException(
+            status_code=403,
+            detail="Request blocked by threat intelligence policy",
+        )
+
+
+    # ========================================================
+    # 2. FAILED AUTHENTICATION PROTECTION
     # ========================================================
 
     if is_auth_blocked(client_id):
+
         logger.warning(
             "Authentication temporarily blocked | request_id=%s | client_id=%s",
             request_id,
@@ -440,10 +584,19 @@ def chat(
 
         raise HTTPException(
             status_code=429,
-            detail="Too many failed authentication attempts. Please try again later.",
+            detail=(
+                "Too many failed authentication attempts. "
+                "Please try again later."
+            ),
         )
 
+
+    # ========================================================
+    # 3. API KEY AUTHENTICATION
+    # ========================================================
+
     if not x_api_key or not verify_api_key(x_api_key):
+
         blocked = record_failed_attempt(client_id)
 
         logger.warning(
@@ -458,9 +611,13 @@ def chat(
         )
 
         if blocked:
+
             raise HTTPException(
                 status_code=429,
-                detail="Too many failed authentication attempts. Please try again later.",
+                detail=(
+                    "Too many failed authentication attempts. "
+                    "Please try again later."
+                ),
             )
 
         raise HTTPException(
@@ -468,13 +625,16 @@ def chat(
             detail="Invalid or missing API key",
         )
 
+
     clear_failed_attempts(client_id)
 
+
     # ========================================================
-    # Rate Limiting
+    # 4. RATE LIMITING
     # ========================================================
 
     if is_rate_limited(x_api_key):
+
         logger.warning(
             "Rate limit exceeded | request_id=%s",
             request_id,
@@ -491,13 +651,17 @@ def chat(
             detail="Too many requests. Please try again later.",
         )
 
+
     # ========================================================
-    # PII Detection and Redaction
+    # 5. PII DETECTION AND REDACTION
     # ========================================================
 
-    detected_pii = detect_pii(chat_request.prompt)
+    detected_pii = detect_pii(
+        chat_request.prompt
+    )
 
     if detected_pii:
+
         logger.warning(
             "PII detected | request_id=%s | types=%s",
             request_id,
@@ -507,7 +671,10 @@ def chat(
         log_security_event(
             event="PII_DETECTED",
             request_id=request_id,
-            details=f"PII detected: {','.join(detected_pii)}",
+            details=(
+                f"PII detected: "
+                f"{','.join(detected_pii)}"
+            ),
         )
 
         sanitized_prompt = redact_pii(
@@ -515,15 +682,20 @@ def chat(
         )
 
     else:
+
         sanitized_prompt = chat_request.prompt
 
+
     # ========================================================
-    # PHI Detection and Redaction
+    # 6. PHI DETECTION AND REDACTION
     # ========================================================
 
-    detected_phi = detect_phi(sanitized_prompt)
+    detected_phi = detect_phi(
+        sanitized_prompt
+    )
 
     if detected_phi:
+
         logger.warning(
             "PHI detected | request_id=%s | types=%s",
             request_id,
@@ -533,18 +705,25 @@ def chat(
         log_security_event(
             event="PHI_DETECTED",
             request_id=request_id,
-            details=f"PHI detected: {','.join(detected_phi)}",
+            details=(
+                f"PHI detected: "
+                f"{','.join(detected_phi)}"
+            ),
         )
 
         sanitized_prompt = redact_phi(
             sanitized_prompt
         )
 
+
     # ========================================================
-    # Prompt Injection Detection
+    # 7. ADVANCED PROMPT INJECTION DETECTION
     # ========================================================
 
-    if detect_prompt_injection(sanitized_prompt):
+    if detect_prompt_injection(
+        sanitized_prompt
+    ):
+
         logger.warning(
             "Prompt injection detected | request_id=%s",
             request_id,
@@ -553,7 +732,9 @@ def chat(
         log_security_event(
             event="PROMPT_INJECTION_DETECTED",
             request_id=request_id,
-            details="Potential prompt injection detected",
+            details=(
+                "Potential advanced prompt injection detected"
+            ),
         )
 
         raise HTTPException(
@@ -561,8 +742,9 @@ def chat(
             detail="Potential prompt injection detected",
         )
 
+
     # ========================================================
-    # Request Accepted
+    # 8. REQUEST ACCEPTED
     # ========================================================
 
     logger.info(
@@ -575,6 +757,7 @@ def chat(
         request_id=request_id,
         details="Chat request passed security checks",
     )
+
 
     return {
         "blocked": False,

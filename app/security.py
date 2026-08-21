@@ -22,27 +22,90 @@ logger = logging.getLogger("llm-security-gateway")
 
 
 # ============================================================
-# Prompt Injection Detection
+# Advanced Prompt Injection Protection
 # ============================================================
 
 SUSPICIOUS_PATTERNS = [
-    "ignore previous instructions",
-    "ignore all previous instructions",
-    "system prompt",
-    "reveal your instructions",
-    "show your system prompt",
-    "jailbreak",
+    # Direct instruction override
+    r"\bignore\s+(?:all\s+)?(?:previous|prior|above|earlier)\s+instructions?\b",
+    r"\bdisregard\s+(?:all\s+)?(?:previous|prior|above|earlier)\s+instructions?\b",
+    r"\boverride\s+(?:all\s+)?(?:previous|prior|system)\s+instructions?\b",
+
+    # System prompt extraction
+    r"\b(?:reveal|show|display|print|output|give|tell)\s+(?:me\s+)?"
+    r"(?:your\s+)?(?:system\s+prompt|hidden\s+prompt|system\s+instructions?)\b",
+
+    r"\bwhat\s+(?:is|are)\s+your\s+(?:system\s+prompt|hidden\s+instructions?)\b",
+
+    # Instruction extraction
+    r"\b(?:reveal|show|dump|print|output)\s+"
+    r"(?:your\s+)?(?:instructions?|rules?|policies?)\b",
+
+    # Role manipulation
+    r"\b(?:you\s+are\s+now|act\s+as|pretend\s+to\s+be|roleplay\s+as)\b",
+
+    # Jailbreak
+    r"\b(?:jailbreak|jail\s*break|bypass\s+(?:your\s+)?(?:safety|security)\s+"
+    r"(?:filters?|restrictions?|rules?))\b",
+
+    # Safety bypass
+    r"\b(?:disable|remove|ignore|bypass)\s+"
+    r"(?:safety|security|content)\s+(?:filters?|controls?|restrictions?)\b",
+
+    # Developer/system message manipulation
+    r"\b(?:ignore|disregard)\s+(?:the\s+)?"
+    r"(?:developer|system|assistant)\s+(?:message|instructions?)\b",
+
+    # Fake authority / hierarchy manipulation
+    r"\b(?:developer|system)\s*:\s*",
+    r"\b(?:system\s+message|developer\s+message)\b",
+
+    # Delimiter / prompt boundary attacks
+    r"```(?:system|developer|assistant)\b",
+    r"<\|(?:system|developer|assistant)\|>",
+    r"\[\[(?:system|developer|assistant)\]\]",
+
+    # Encoded instruction indicators
+    r"\b(?:base64|rot13|hex)\s+(?:decode|encoded?)\b",
 ]
 
 
-def detect_prompt_injection(prompt: str) -> bool:
-    prompt_lower = prompt.lower()
+COMPILED_INJECTION_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in SUSPICIOUS_PATTERNS
+]
 
-    for pattern in SUSPICIOUS_PATTERNS:
-        if pattern in prompt_lower:
+
+def normalize_prompt(prompt: str) -> str:
+    """
+    Normalize user input before security inspection.
+
+    Removes excessive whitespace and normalizes Unicode so
+    attackers cannot easily bypass simple pattern detection.
+    """
+    normalized = prompt.replace("\x00", " ")
+
+    normalized = re.sub(
+        r"\s+",
+        " ",
+        normalized,
+    )
+
+    return normalized.strip()
+
+
+def detect_prompt_injection(prompt: str) -> bool:
+    """
+    Detect common and advanced prompt injection techniques.
+    """
+
+    normalized_prompt = normalize_prompt(prompt)
+
+    for pattern in COMPILED_INJECTION_PATTERNS:
+        if pattern.search(normalized_prompt):
             logger.warning(
-                "Prompt injection detected: pattern='%s'",
-                pattern,
+                "Advanced prompt injection detected | pattern=%s",
+                pattern.pattern,
             )
             return True
 
@@ -62,13 +125,6 @@ PII_PATTERNS = {
         r"(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d)"
     ),
 
-    # Aadhaar:
-    # 123456789012
-    # 1234 5678 9012
-    # 1234-5678-9012
-    #
-    # Prevents matching part of:
-    # 4111 1111 1111 1111
     "AADHAAR": re.compile(
         r"(?<!\d)(?<!\d[\s-])"
         r"(?:\d{12}|\d{4}[\s-]\d{4}[\s-]\d{4})"
@@ -113,7 +169,6 @@ def redact_pii(prompt: str) -> str:
         "CARD": "[REDACTED_CARD]",
     }
 
-    # Card before Aadhaar prevents partial card matching.
     ordered_patterns = [
         "EMAIL",
         "PHONE",
@@ -225,13 +280,11 @@ def verify_api_key(api_key: str) -> bool:
     if not api_key:
         return False
 
-    # First check Redis for persistent API keys.
     metadata = get_api_key(api_key)
 
     if metadata is not None:
         return bool(metadata.get("active", False))
 
-    # Keep the default environment API key working.
     for stored_key, local_metadata in API_KEYS.items():
         if secrets.compare_digest(api_key, stored_key):
             return bool(local_metadata["active"])
