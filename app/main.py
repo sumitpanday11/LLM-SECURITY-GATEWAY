@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 
 from app.security import (
     detect_prompt_injection,
+    detect_pii,
+    redact_pii,
     verify_api_key,
     generate_api_key,
     add_api_key,
@@ -479,7 +481,29 @@ def chat(
             detail="Too many requests. Please try again later.",
         )
 
-    if detect_prompt_injection(chat_request.prompt):
+    # PII Detection and Redaction
+    detected_pii = detect_pii(chat_request.prompt)
+
+    if detected_pii:
+        logger.warning(
+            "PII detected | request_id=%s | types=%s",
+            request_id,
+            ",".join(detected_pii),
+        )
+
+        log_security_event(
+            event="PII_DETECTED",
+            request_id=request_id,
+            details=f"PII detected: {','.join(detected_pii)}",
+        )
+
+        sanitized_prompt = redact_pii(chat_request.prompt)
+
+    else:
+        sanitized_prompt = chat_request.prompt
+
+    # Prompt Injection Detection
+    if detect_prompt_injection(sanitized_prompt):
         logger.warning(
             "Prompt injection detected | request_id=%s",
             request_id,
@@ -509,7 +533,8 @@ def chat(
 
     return {
         "blocked": False,
-        "prompt": chat_request.prompt,
+        "prompt": sanitized_prompt,
         "message": "Request received by LLM Security Gateway",
         "request_id": request_id,
     }
+    

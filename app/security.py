@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -42,6 +43,89 @@ def detect_prompt_injection(prompt: str) -> bool:
             return True
 
     return False
+
+
+# PII Detection Patterns
+PII_PATTERNS = {
+    "EMAIL": re.compile(
+        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+    ),
+
+    "PHONE": re.compile(
+        r"(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d)"
+    ),
+
+    # Supports:
+    # 123456789012
+    # 1234 5678 9012
+    # 1234-5678-9012
+    #
+    # Prevents matching the last 12 digits of a 16-digit
+    # card number such as:
+    # 4111 1111 1111 1111
+    "AADHAAR": re.compile(
+        r"(?<!\d)(?<!\d[\s-])"
+        r"(?:\d{12}|\d{4}[\s-]\d{4}[\s-]\d{4})"
+        r"(?![\s-]?\d)"
+    ),
+
+    "PAN": re.compile(
+        r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
+        re.IGNORECASE,
+    ),
+
+    "CARD": re.compile(
+        r"(?<!\d)(?:\d{4}[\s-]?){3}\d{4}(?!\d)"
+    ),
+}
+
+
+def detect_pii(prompt: str) -> list[str]:
+    detected_types = []
+
+    for pii_type, pattern in PII_PATTERNS.items():
+        if pattern.search(prompt):
+            detected_types.append(pii_type)
+
+    if detected_types:
+        logger.warning(
+            "PII detected | types=%s",
+            ",".join(detected_types),
+        )
+
+    return detected_types
+
+
+def redact_pii(prompt: str) -> str:
+    redacted_prompt = prompt
+
+    replacements = {
+        "EMAIL": "[REDACTED_EMAIL]",
+        "PHONE": "[REDACTED_PHONE]",
+        "AADHAAR": "[REDACTED_AADHAAR]",
+        "PAN": "[REDACTED_PAN]",
+        "CARD": "[REDACTED_CARD]",
+    }
+
+    # Card is processed before Aadhaar so that a 16-digit
+    # card number is never partially redacted as Aadhaar.
+    ordered_patterns = [
+        "EMAIL",
+        "PHONE",
+        "CARD",
+        "AADHAAR",
+        "PAN",
+    ]
+
+    for pii_type in ordered_patterns:
+        pattern = PII_PATTERNS[pii_type]
+
+        redacted_prompt = pattern.sub(
+            replacements[pii_type],
+            redacted_prompt,
+        )
+
+    return redacted_prompt
 
 
 # API Key Management
