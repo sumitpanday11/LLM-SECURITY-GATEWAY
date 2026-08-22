@@ -1,18 +1,14 @@
-from fastapi import FastAPI, HTTPException, Header, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
-
 import asyncio
 import logging
 import os
+import time
 import uuid
 
+from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
-
-from prometheus_client import (
-    CONTENT_TYPE_LATEST,
-    generate_latest,
-)
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
 from app.security import (
     detect_prompt_injection,
@@ -49,17 +45,38 @@ from app.semantic_cache import (
     save_cached_response,
 )
 
+from app.database import get_db_connection
+
 from app.metrics import (
     REQUESTS_TOTAL,
     REQUEST_DURATION,
+    SECURITY_EVENTS_TOTAL,
+    AUTH_FAILURES_TOTAL,
+    BLOCKED_REQUESTS_TOTAL,
+    RATE_LIMIT_EXCEEDED_TOTAL,
 )
 
+
+# ============================================================
+# APPLICATION
+# ============================================================
 
 app = FastAPI(
     title="Enterprise LLM Security Gateway",
     description="Secure proxy gateway for enterprise LLM and GenAI requests",
-    version="0.4.0",
+    version="0.5.0",
 )
+
+
+logger = logging.getLogger("llm-security-gateway")
+
+
+# ============================================================
+# SECURITY CONFIGURATION
+# ============================================================
+
+MAX_REQUEST_SIZE = 1024 * 1024
+REQUEST_TIMEOUT_SECONDS = 10
 
 
 # ============================================================
@@ -86,56 +103,82 @@ app.add_middleware(
 )
 
 
-logger = logging.getLogger("llm-security-gateway")
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def record_security_metric(event: str):
+    """
+    Increment Prometheus security-event counter.
+    """
+    SECURITY_EVENTS_TOTAL.labels(
+        event=event
+    ).inc()
+
+
+def record_blocked_metric(reason: str):
+    """
+    Increment Prometheus blocked-request counter.
+    """
+    BLOCKED_REQUESTS_TOTAL.labels(
+        reason=reason
+    ).inc()
+
+
+def record_request_metrics(
+    request: Request,
+    status_code: int,
+    duration: float,
+):
+    """
+    Record HTTP request count and duration.
+    """
+    REQUESTS_TOTAL.labels(
+        method=request.method,
+        path=request.url.path,
+        status=str(status_code),
+    ).inc()
+
+    REQUEST_DURATION.labels(
+        method=request.method,
+        path=request.url.path,
+    ).observe(duration)
 
 
 # ============================================================
-# SECURITY CONFIGURATION
-# ============================================================
-
-MAX_REQUEST_SIZE = 1024 * 1024
-REQUEST_TIMEOUT_SECONDS = 10
-
-
-# ============================================================
-# SECURITY MONITORING / METRICS
+# REQUEST METRICS MIDDLEWARE
 # ============================================================
 
 @app.middleware("http")
-async def collect_metrics(
+async def metrics_middleware(
     request: Request,
     call_next,
 ):
-
-    start_time = asyncio.get_running_loop().time()
-
-    status_code = 500
+    start_time = time.perf_counter()
 
     try:
-
         response = await call_next(request)
 
-        status_code = response.status_code
+        duration = time.perf_counter() - start_time
+
+        record_request_metrics(
+            request,
+            response.status_code,
+            duration,
+        )
 
         return response
 
-    finally:
+    except Exception:
+        duration = time.perf_counter() - start_time
 
-        duration = (
-            asyncio.get_running_loop().time()
-            - start_time
+        record_request_metrics(
+            request,
+            500,
+            duration,
         )
 
-        REQUESTS_TOTAL.labels(
-            method=request.method,
-            path=request.url.path,
-            status=str(status_code),
-        ).inc()
-
-        REQUEST_DURATION.labels(
-            method=request.method,
-            path=request.url.path,
-        ).observe(duration)
+        raise
 
 
 # ============================================================
@@ -161,7 +204,6 @@ async def enforce_request_size(
 
             try:
                 request_size = int(content_length)
-
             except ValueError:
                 request_size = 0
 
@@ -174,7 +216,8 @@ async def enforce_request_size(
                 )
 
                 logger.warning(
-                    "Request body too large | request_id=%s | content_length=%s",
+                    "Request body too large | "
+                    "request_id=%s | content_length=%s",
                     request_id,
                     content_length,
                 )
@@ -185,11 +228,21 @@ async def enforce_request_size(
                     details="Request body exceeded 1 MB limit",
                 )
 
+                record_security_metric(
+                    "PAYLOAD_TOO_LARGE"
+                )
+
+                record_blocked_metric(
+                    "PAYLOAD_TOO_LARGE"
+                )
+
                 return JSONResponse(
                     status_code=413,
                     content={
                         "error": "Payload Too Large",
-                        "message": "Request body must not exceed 1 MB",
+                        "message": (
+                            "Request body must not exceed 1 MB"
+                        ),
                         "request_id": request_id,
                     },
                 )
@@ -244,8 +297,10 @@ async def enforce_content_type(
     ):
 
         content_type = (
-            request.headers
-            .get("content-type", "")
+            request.headers.get(
+                "content-type",
+                "",
+            )
             .split(";")[0]
             .strip()
             .lower()
@@ -260,7 +315,8 @@ async def enforce_content_type(
             )
 
             logger.warning(
-                "Invalid content type | request_id=%s | content_type=%s",
+                "Invalid content type | "
+                "request_id=%s | content_type=%s",
                 request_id,
                 content_type,
             )
@@ -268,14 +324,26 @@ async def enforce_content_type(
             log_security_event(
                 event="INVALID_CONTENT_TYPE",
                 request_id=request_id,
-                details="Content-Type must be application/json",
+                details=(
+                    "Content-Type must be application/json"
+                ),
+            )
+
+            record_security_metric(
+                "INVALID_CONTENT_TYPE"
+            )
+
+            record_blocked_metric(
+                "INVALID_CONTENT_TYPE"
             )
 
             return JSONResponse(
                 status_code=415,
                 content={
                     "error": "Unsupported Media Type",
-                    "message": "Content-Type must be application/json",
+                    "message": (
+                        "Content-Type must be application/json"
+                    ),
                     "request_id": request_id,
                 },
             )
@@ -298,7 +366,8 @@ async def add_request_id(
     request.state.request_id = request_id
 
     logger.info(
-        "Request started | request_id=%s | method=%s | path=%s",
+        "Request started | "
+        "request_id=%s | method=%s | path=%s",
         request_id,
         request.method,
         request.url.path,
@@ -311,7 +380,8 @@ async def add_request_id(
     ] = request_id
 
     logger.info(
-        "Request completed | request_id=%s | status_code=%s",
+        "Request completed | "
+        "request_id=%s | status_code=%s",
         request_id,
         response.status_code,
     )
@@ -350,7 +420,8 @@ async def enforce_request_timeout(
             )
 
             logger.warning(
-                "Request timeout | request_id=%s | timeout=%ss",
+                "Request timeout | "
+                "request_id=%s | timeout=%ss",
                 request_id,
                 REQUEST_TIMEOUT_SECONDS,
             )
@@ -358,14 +429,28 @@ async def enforce_request_timeout(
             log_security_event(
                 event="REQUEST_TIMEOUT",
                 request_id=request_id,
-                details="Request processing exceeded 10 seconds",
+                details=(
+                    "Request processing exceeded "
+                    "10 seconds"
+                ),
+            )
+
+            record_security_metric(
+                "REQUEST_TIMEOUT"
+            )
+
+            record_blocked_metric(
+                "REQUEST_TIMEOUT"
             )
 
             return JSONResponse(
                 status_code=504,
                 content={
                     "error": "Gateway Timeout",
-                    "message": "Request processing exceeded the allowed time",
+                    "message": (
+                        "Request processing exceeded "
+                        "the allowed time"
+                    ),
                     "request_id": request_id,
                 },
             )
@@ -390,7 +475,8 @@ async def global_exception_handler(
     )
 
     logger.exception(
-        "Unhandled exception | request_id=%s | path=%s",
+        "Unhandled exception | "
+        "request_id=%s | path=%s",
         request_id,
         request.url.path,
     )
@@ -399,6 +485,10 @@ async def global_exception_handler(
         event="UNHANDLED_EXCEPTION",
         request_id=request_id,
         details="Internal server error",
+    )
+
+    record_security_metric(
+        "UNHANDLED_EXCEPTION"
     )
 
     return JSONResponse(
@@ -441,7 +531,7 @@ def root():
 
     return {
         "message": "LLM Security Gateway is running",
-        "version": "0.4.0",
+        "version": "0.5.0",
     }
 
 
@@ -472,13 +562,55 @@ def metrics():
 
 
 # ============================================================
+# DATABASE HEALTH
+# ============================================================
+
+@app.get("/health/database")
+def database_health():
+
+    try:
+
+        conn = get_db_connection()
+
+        try:
+            with conn.cursor() as cursor:
+
+                cursor.execute(
+                    "SELECT current_database(), current_user"
+                )
+
+                result = cursor.fetchone()
+
+        finally:
+            conn.close()
+
+        return {
+            "status": "healthy",
+            "database": result,
+        }
+
+    except Exception:
+
+        logger.exception(
+            "PostgreSQL health check failed"
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail="PostgreSQL database unavailable",
+        )
+
+
+# ============================================================
 # API KEY INFORMATION
 # ============================================================
 
 @app.get("/keys/info")
 def get_key_info(
     request: Request,
-    x_api_key: str | None = Header(default=None),
+    x_api_key: str | None = Header(
+        default=None
+    ),
 ):
 
     request_id = request.state.request_id
@@ -487,6 +619,8 @@ def get_key_info(
         not x_api_key
         or not verify_api_key(x_api_key)
     ):
+
+        AUTH_FAILURES_TOTAL.inc()
 
         raise HTTPException(
             status_code=401,
@@ -512,7 +646,13 @@ def get_key_info(
     log_security_event(
         event="API_KEY_INFO_ACCESSED",
         request_id=request_id,
-        details=f"API key metadata accessed | role={role}",
+        details=(
+            f"API key metadata accessed | role={role}"
+        ),
+    )
+
+    record_security_metric(
+        "API_KEY_INFO_ACCESSED"
     )
 
     return {
@@ -531,7 +671,9 @@ def get_key_info(
 @app.post("/keys/generate")
 def create_api_key(
     request: Request,
-    x_api_key: str | None = Header(default=None),
+    x_api_key: str | None = Header(
+        default=None
+    ),
 ):
 
     request_id = request.state.request_id
@@ -540,6 +682,8 @@ def create_api_key(
         not x_api_key
         or not verify_api_key(x_api_key)
     ):
+
+        AUTH_FAILURES_TOTAL.inc()
 
         raise HTTPException(
             status_code=401,
@@ -561,7 +705,14 @@ def create_api_key(
     log_security_event(
         event="API_KEY_GENERATED",
         request_id=request_id,
-        details=f"New user API key generated by role={role}",
+        details=(
+            f"New user API key generated "
+            f"by role={role}"
+        ),
+    )
+
+    record_security_metric(
+        "API_KEY_GENERATED"
     )
 
     return {
@@ -581,7 +732,9 @@ def create_api_key(
 def revoke_key(
     request: Request,
     old_api_key: str,
-    x_api_key: str | None = Header(default=None),
+    x_api_key: str | None = Header(
+        default=None
+    ),
 ):
 
     request_id = request.state.request_id
@@ -590,6 +743,8 @@ def revoke_key(
         not x_api_key
         or not verify_api_key(x_api_key)
     ):
+
+        AUTH_FAILURES_TOTAL.inc()
 
         raise HTTPException(
             status_code=401,
@@ -611,7 +766,13 @@ def revoke_key(
     log_security_event(
         event="API_KEY_REVOKED",
         request_id=request_id,
-        details=f"API key revoked by role={role}",
+        details=(
+            f"API key revoked by role={role}"
+        ),
+    )
+
+    record_security_metric(
+        "API_KEY_REVOKED"
     )
 
     return {
@@ -629,7 +790,9 @@ def revoke_key(
 def rotate_key(
     request: Request,
     rotate_request: RotateKeyRequest,
-    x_api_key: str | None = Header(default=None),
+    x_api_key: str | None = Header(
+        default=None
+    ),
 ):
 
     request_id = request.state.request_id
@@ -638,6 +801,8 @@ def rotate_key(
         not x_api_key
         or not verify_api_key(x_api_key)
     ):
+
+        AUTH_FAILURES_TOTAL.inc()
 
         raise HTTPException(
             status_code=401,
@@ -663,7 +828,13 @@ def rotate_key(
     log_security_event(
         event="API_KEY_ROTATED",
         request_id=request_id,
-        details=f"API key rotated by role={role}",
+        details=(
+            f"API key rotated by role={role}"
+        ),
+    )
+
+    record_security_metric(
+        "API_KEY_ROTATED"
     )
 
     return {
@@ -683,7 +854,9 @@ def rotate_key(
 def chat(
     request: Request,
     chat_request: ChatRequest,
-    x_api_key: str | None = Header(default=None),
+    x_api_key: str | None = Header(
+        default=None
+    ),
 ):
 
     request_id = request.state.request_id
@@ -701,7 +874,8 @@ def chat(
     if is_ip_threatened(client_id):
 
         logger.warning(
-            "Threat intelligence block | request_id=%s | client_ip=%s",
+            "Threat intelligence block | "
+            "request_id=%s | client_ip=%s",
             request_id,
             client_id,
         )
@@ -709,12 +883,26 @@ def chat(
         log_security_event(
             event="THREAT_INTELLIGENCE_BLOCK",
             request_id=request_id,
-            details="Client IP matched threat-intelligence blocklist",
+            details=(
+                "Client IP matched "
+                "threat-intelligence blocklist"
+            ),
+        )
+
+        record_security_metric(
+            "THREAT_INTELLIGENCE_BLOCK"
+        )
+
+        record_blocked_metric(
+            "THREAT_INTELLIGENCE"
         )
 
         raise HTTPException(
             status_code=403,
-            detail="Request blocked by threat intelligence policy",
+            detail=(
+                "Request blocked by "
+                "threat intelligence policy"
+            ),
         )
 
     # ========================================================
@@ -724,7 +912,8 @@ def chat(
     if is_auth_blocked(client_id):
 
         logger.warning(
-            "Authentication temporarily blocked | request_id=%s | client_id=%s",
+            "Authentication temporarily blocked | "
+            "request_id=%s | client_id=%s",
             request_id,
             client_id,
         )
@@ -732,14 +921,24 @@ def chat(
         log_security_event(
             event="AUTHENTICATION_BLOCKED",
             request_id=request_id,
-            details="Too many failed API key attempts",
+            details=(
+                "Too many failed API key attempts"
+            ),
+        )
+
+        record_security_metric(
+            "AUTHENTICATION_BLOCKED"
+        )
+
+        record_blocked_metric(
+            "AUTHENTICATION"
         )
 
         raise HTTPException(
             status_code=429,
             detail=(
-                "Too many failed authentication attempts. "
-                "Please try again later."
+                "Too many failed authentication "
+                "attempts. Please try again later."
             ),
         )
 
@@ -752,12 +951,15 @@ def chat(
         or not verify_api_key(x_api_key)
     ):
 
+        AUTH_FAILURES_TOTAL.inc()
+
         blocked = record_failed_attempt(
             client_id
         )
 
         logger.warning(
-            "Unauthorized request | request_id=%s",
+            "Unauthorized request | "
+            "request_id=%s",
             request_id,
         )
 
@@ -767,13 +969,21 @@ def chat(
             details="Invalid or missing API key",
         )
 
+        record_security_metric(
+            "UNAUTHORIZED_REQUEST"
+        )
+
+        record_blocked_metric(
+            "AUTHENTICATION"
+        )
+
         if blocked:
 
             raise HTTPException(
                 status_code=429,
                 detail=(
-                    "Too many failed authentication attempts. "
-                    "Please try again later."
+                    "Too many failed authentication "
+                    "attempts. Please try again later."
                 ),
             )
 
@@ -782,7 +992,9 @@ def chat(
             detail="Invalid or missing API key",
         )
 
-    clear_failed_attempts(client_id)
+    clear_failed_attempts(
+        client_id
+    )
 
     # ========================================================
     # 4. RBAC
@@ -810,7 +1022,8 @@ def chat(
         if cached_response is not None:
 
             logger.info(
-                "Semantic cache hit | request_id=%s | role=%s",
+                "Semantic cache hit | "
+                "request_id=%s | role=%s",
                 request_id,
                 role,
             )
@@ -819,12 +1032,23 @@ def chat(
                 event="SEMANTIC_CACHE_HIT",
                 request_id=request_id,
                 details=(
-                    f"Cached response returned | role={role}"
+                    f"Cached response returned | "
+                    f"role={role}"
                 ),
             )
 
+            record_security_metric(
+                "SEMANTIC_CACHE_HIT"
+            )
+
+            cached_response = dict(
+                cached_response
+            )
+
             cached_response["cached"] = True
-            cached_response["request_id"] = request_id
+            cached_response[
+                "request_id"
+            ] = request_id
             cached_response["role"] = role
 
             return cached_response
@@ -836,19 +1060,35 @@ def chat(
     if is_rate_limited(x_api_key):
 
         logger.warning(
-            "Rate limit exceeded | request_id=%s",
+            "Rate limit exceeded | "
+            "request_id=%s",
             request_id,
         )
 
         log_security_event(
             event="RATE_LIMIT_EXCEEDED",
             request_id=request_id,
-            details="API request limit exceeded",
+            details=(
+                "API request limit exceeded"
+            ),
+        )
+
+        RATE_LIMIT_EXCEEDED_TOTAL.inc()
+
+        record_security_metric(
+            "RATE_LIMIT_EXCEEDED"
+        )
+
+        record_blocked_metric(
+            "RATE_LIMIT"
         )
 
         raise HTTPException(
             status_code=429,
-            detail="Too many requests. Please try again later.",
+            detail=(
+                "Too many requests. "
+                "Please try again later."
+            ),
         )
 
     # ========================================================
@@ -862,7 +1102,8 @@ def chat(
     if detected_pii:
 
         logger.warning(
-            "PII detected | request_id=%s | types=%s",
+            "PII detected | "
+            "request_id=%s | types=%s",
             request_id,
             ",".join(detected_pii),
         )
@@ -876,13 +1117,19 @@ def chat(
             ),
         )
 
+        record_security_metric(
+            "PII_DETECTED"
+        )
+
         sanitized_prompt = redact_pii(
             chat_request.prompt
         )
 
     else:
 
-        sanitized_prompt = chat_request.prompt
+        sanitized_prompt = (
+            chat_request.prompt
+        )
 
     # ========================================================
     # 8. PHI DETECTION AND REDACTION
@@ -895,7 +1142,8 @@ def chat(
     if detected_phi:
 
         logger.warning(
-            "PHI detected | request_id=%s | types=%s",
+            "PHI detected | "
+            "request_id=%s | types=%s",
             request_id,
             ",".join(detected_phi),
         )
@@ -907,6 +1155,10 @@ def chat(
                 f"PHI detected: "
                 f"{','.join(detected_phi)}"
             ),
+        )
+
+        record_security_metric(
+            "PHI_DETECTED"
         )
 
         sanitized_prompt = redact_phi(
@@ -922,7 +1174,8 @@ def chat(
     ):
 
         logger.warning(
-            "Prompt injection detected | request_id=%s",
+            "Prompt injection detected | "
+            "request_id=%s",
             request_id,
         )
 
@@ -930,13 +1183,24 @@ def chat(
             event="PROMPT_INJECTION_DETECTED",
             request_id=request_id,
             details=(
-                "Potential advanced prompt injection detected"
+                "Potential advanced "
+                "prompt injection detected"
             ),
+        )
+
+        record_security_metric(
+            "PROMPT_INJECTION_DETECTED"
+        )
+
+        record_blocked_metric(
+            "PROMPT_INJECTION"
         )
 
         raise HTTPException(
             status_code=403,
-            detail="Potential prompt injection detected",
+            detail=(
+                "Potential prompt injection detected"
+            ),
         )
 
     # ========================================================
@@ -945,23 +1209,30 @@ def chat(
 
     llm_output = (
         "Request processed successfully. "
-        "The gateway did not expose any internal credentials."
+        "The gateway did not expose any "
+        "internal credentials."
     )
 
     # ========================================================
     # 11. UNSAFE OUTPUT FILTERING
     # ========================================================
 
-    sanitized_output, detected_output_threats = (
-        filter_unsafe_output(llm_output)
+    (
+        sanitized_output,
+        detected_output_threats,
+    ) = filter_unsafe_output(
+        llm_output
     )
 
     if detected_output_threats:
 
         logger.warning(
-            "Unsafe output detected | request_id=%s | types=%s",
+            "Unsafe output detected | "
+            "request_id=%s | types=%s",
             request_id,
-            ",".join(detected_output_threats),
+            ",".join(
+                detected_output_threats
+            ),
         )
 
         log_security_event(
@@ -973,12 +1244,17 @@ def chat(
             ),
         )
 
+        record_security_metric(
+            "UNSAFE_OUTPUT_DETECTED"
+        )
+
     # ========================================================
     # 12. REQUEST ACCEPTED
     # ========================================================
 
     logger.info(
-        "Request accepted successfully | request_id=%s | role=%s",
+        "Request accepted successfully | "
+        "request_id=%s | role=%s",
         request_id,
         role,
     )
@@ -987,20 +1263,34 @@ def chat(
         event="REQUEST_ACCEPTED",
         request_id=request_id,
         details=(
-            f"Chat request passed security checks | role={role}"
+            f"Chat request passed "
+            f"security checks | role={role}"
         ),
+    )
+
+    record_security_metric(
+        "REQUEST_ACCEPTED"
     )
 
     response_data = {
         "blocked": False,
         "prompt": sanitized_prompt,
         "output": sanitized_output,
-        "output_threats": detected_output_threats,
+        "output_threats": (
+            detected_output_threats
+        ),
         "role": role,
-        "message": "Request processed by LLM Security Gateway",
+        "message": (
+            "Request processed by "
+            "LLM Security Gateway"
+        ),
         "cached": False,
         "request_id": request_id,
     }
+
+    # ========================================================
+    # 13. SEMANTIC CACHE SAVE
+    # ========================================================
 
     cache_response = response_data.copy()
 
