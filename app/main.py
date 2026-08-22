@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 import asyncio
 import logging
@@ -8,6 +8,11 @@ import os
 import uuid
 
 from pydantic import BaseModel, Field
+
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    generate_latest,
+)
 
 from app.security import (
     detect_prompt_injection,
@@ -42,6 +47,11 @@ from app.output_filter import filter_unsafe_output
 from app.semantic_cache import (
     get_cached_response,
     save_cached_response,
+)
+
+from app.metrics import (
+    REQUESTS_TOTAL,
+    REQUEST_DURATION,
 )
 
 
@@ -88,20 +98,70 @@ REQUEST_TIMEOUT_SECONDS = 10
 
 
 # ============================================================
+# SECURITY MONITORING / METRICS
+# ============================================================
+
+@app.middleware("http")
+async def collect_metrics(
+    request: Request,
+    call_next,
+):
+
+    start_time = asyncio.get_running_loop().time()
+
+    status_code = 500
+
+    try:
+
+        response = await call_next(request)
+
+        status_code = response.status_code
+
+        return response
+
+    finally:
+
+        duration = (
+            asyncio.get_running_loop().time()
+            - start_time
+        )
+
+        REQUESTS_TOTAL.labels(
+            method=request.method,
+            path=request.url.path,
+            status=str(status_code),
+        ).inc()
+
+        REQUEST_DURATION.labels(
+            method=request.method,
+            path=request.url.path,
+        ).observe(duration)
+
+
+# ============================================================
 # REQUEST SIZE LIMIT
 # ============================================================
 
 @app.middleware("http")
-async def enforce_request_size(request: Request, call_next):
+async def enforce_request_size(
+    request: Request,
+    call_next,
+):
 
-    if request.method == "POST" and request.url.path == "/chat":
+    if (
+        request.method == "POST"
+        and request.url.path == "/chat"
+    ):
 
-        content_length = request.headers.get("content-length")
+        content_length = request.headers.get(
+            "content-length"
+        )
 
         if content_length:
 
             try:
                 request_size = int(content_length)
+
             except ValueError:
                 request_size = 0
 
@@ -142,14 +202,28 @@ async def enforce_request_size(request: Request, call_next):
 # ============================================================
 
 @app.middleware("http")
-async def add_security_headers(request: Request, call_next):
+async def add_security_headers(
+    request: Request,
+    call_next,
+):
 
     response = await call_next(request)
 
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "no-referrer"
-    response.headers["Cache-Control"] = "no-store"
+    response.headers[
+        "X-Content-Type-Options"
+    ] = "nosniff"
+
+    response.headers[
+        "X-Frame-Options"
+    ] = "DENY"
+
+    response.headers[
+        "Referrer-Policy"
+    ] = "no-referrer"
+
+    response.headers[
+        "Cache-Control"
+    ] = "no-store"
 
     return response
 
@@ -159,12 +233,19 @@ async def add_security_headers(request: Request, call_next):
 # ============================================================
 
 @app.middleware("http")
-async def enforce_content_type(request: Request, call_next):
+async def enforce_content_type(
+    request: Request,
+    call_next,
+):
 
-    if request.method == "POST" and request.url.path == "/chat":
+    if (
+        request.method == "POST"
+        and request.url.path == "/chat"
+    ):
 
         content_type = (
-            request.headers.get("content-type", "")
+            request.headers
+            .get("content-type", "")
             .split(";")[0]
             .strip()
             .lower()
@@ -207,7 +288,10 @@ async def enforce_content_type(request: Request, call_next):
 # ============================================================
 
 @app.middleware("http")
-async def add_request_id(request: Request, call_next):
+async def add_request_id(
+    request: Request,
+    call_next,
+):
 
     request_id = str(uuid.uuid4())
 
@@ -222,7 +306,9 @@ async def add_request_id(request: Request, call_next):
 
     response = await call_next(request)
 
-    response.headers["X-Request-ID"] = request_id
+    response.headers[
+        "X-Request-ID"
+    ] = request_id
 
     logger.info(
         "Request completed | request_id=%s | status_code=%s",
@@ -238,9 +324,15 @@ async def add_request_id(request: Request, call_next):
 # ============================================================
 
 @app.middleware("http")
-async def enforce_request_timeout(request: Request, call_next):
+async def enforce_request_timeout(
+    request: Request,
+    call_next,
+):
 
-    if request.method == "POST" and request.url.path == "/chat":
+    if (
+        request.method == "POST"
+        and request.url.path == "/chat"
+    ):
 
         try:
 
@@ -367,6 +459,19 @@ def health_check():
 
 
 # ============================================================
+# PROMETHEUS METRICS
+# ============================================================
+
+@app.get("/metrics")
+def metrics():
+
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
+
+
+# ============================================================
 # API KEY INFORMATION
 # ============================================================
 
@@ -378,7 +483,10 @@ def get_key_info(
 
     request_id = request.state.request_id
 
-    if not x_api_key or not verify_api_key(x_api_key):
+    if (
+        not x_api_key
+        or not verify_api_key(x_api_key)
+    ):
 
         raise HTTPException(
             status_code=401,
@@ -390,7 +498,9 @@ def get_key_info(
         "key_info",
     )
 
-    metadata = get_api_key_metadata(x_api_key)
+    metadata = get_api_key_metadata(
+        x_api_key
+    )
 
     if metadata is None:
 
@@ -426,7 +536,10 @@ def create_api_key(
 
     request_id = request.state.request_id
 
-    if not x_api_key or not verify_api_key(x_api_key):
+    if (
+        not x_api_key
+        or not verify_api_key(x_api_key)
+    ):
 
         raise HTTPException(
             status_code=401,
@@ -473,7 +586,10 @@ def revoke_key(
 
     request_id = request.state.request_id
 
-    if not x_api_key or not verify_api_key(x_api_key):
+    if (
+        not x_api_key
+        or not verify_api_key(x_api_key)
+    ):
 
         raise HTTPException(
             status_code=401,
@@ -518,7 +634,10 @@ def rotate_key(
 
     request_id = request.state.request_id
 
-    if not x_api_key or not verify_api_key(x_api_key):
+    if (
+        not x_api_key
+        or not verify_api_key(x_api_key)
+    ):
 
         raise HTTPException(
             status_code=401,
@@ -628,9 +747,14 @@ def chat(
     # 3. API KEY AUTHENTICATION
     # ========================================================
 
-    if not x_api_key or not verify_api_key(x_api_key):
+    if (
+        not x_api_key
+        or not verify_api_key(x_api_key)
+    ):
 
-        blocked = record_failed_attempt(client_id)
+        blocked = record_failed_attempt(
+            client_id
+        )
 
         logger.warning(
             "Unauthorized request | request_id=%s",
@@ -679,7 +803,9 @@ def chat(
 
     if cached_entry is not None:
 
-        cached_response = cached_entry.get("response")
+        cached_response = cached_entry.get(
+            "response"
+        )
 
         if cached_response is not None:
 
@@ -878,8 +1004,15 @@ def chat(
 
     cache_response = response_data.copy()
 
-    cache_response.pop("request_id", None)
-    cache_response.pop("role", None)
+    cache_response.pop(
+        "request_id",
+        None,
+    )
+
+    cache_response.pop(
+        "role",
+        None,
+    )
 
     save_cached_response(
         chat_request.prompt,
