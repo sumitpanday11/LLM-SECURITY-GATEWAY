@@ -36,6 +36,7 @@ def save_api_key(
     key_id: str,
     created_at: str | None = None,
     active: bool = True,
+    role: str = "user",
 ) -> None:
     if created_at is None:
         created_at = datetime.now(timezone.utc).isoformat()
@@ -44,6 +45,7 @@ def save_api_key(
         "key_id": key_id,
         "created_at": created_at,
         "active": active,
+        "role": role,
     }
 
     redis_client.set(

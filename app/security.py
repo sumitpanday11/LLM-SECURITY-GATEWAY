@@ -45,8 +45,8 @@ SUSPICIOUS_PATTERNS = [
     r"\b(?:you\s+are\s+now|act\s+as|pretend\s+to\s+be|roleplay\s+as)\b",
 
     # Jailbreak
-    r"\b(?:jailbreak|jail\s*break|bypass\s+(?:your\s+)?(?:safety|security)\s+"
-    r"(?:filters?|restrictions?|rules?))\b",
+    r"\b(?:jailbreak|jail\s*break|bypass\s+(?:your\s+)?"
+    r"(?:safety|security)\s+(?:filters?|restrictions?|rules?))\b",
 
     # Safety bypass
     r"\b(?:disable|remove|ignore|bypass)\s+"
@@ -58,11 +58,14 @@ SUSPICIOUS_PATTERNS = [
 
     # Fake authority / hierarchy manipulation
     r"\b(?:developer|system)\s*:\s*",
+
     r"\b(?:system\s+message|developer\s+message)\b",
 
     # Delimiter / prompt boundary attacks
     r"```(?:system|developer|assistant)\b",
+
     r"<\|(?:system|developer|assistant)\|>",
+
     r"\[\[(?:system|developer|assistant)\]\]",
 
     # Encoded instruction indicators
@@ -98,7 +101,6 @@ def detect_prompt_injection(prompt: str) -> bool:
     """
     Detect common and advanced prompt injection techniques.
     """
-
     normalized_prompt = normalize_prompt(prompt)
 
     for pattern in COMPILED_INJECTION_PATTERNS:
@@ -264,19 +266,30 @@ def redact_phi(prompt: str) -> str:
 
 
 # ============================================================
-# API Key Management
+# API Key Management + RBAC
 # ============================================================
 
+# Default development key is ADMIN so it can perform
+# administrative key-management operations.
+DEFAULT_API_KEY = os.getenv(
+    "LLM_GATEWAY_API_KEY",
+    "dev-secret-key",
+)
+
 API_KEYS: Dict[str, Dict[str, object]] = {
-    os.getenv("LLM_GATEWAY_API_KEY", "dev-secret-key"): {
+    DEFAULT_API_KEY: {
         "key_id": "default",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "active": True,
+        "role": "admin",
     },
 }
 
 
 def verify_api_key(api_key: str) -> bool:
+    """
+    Verify API key existence and active status.
+    """
     if not api_key:
         return False
 
@@ -293,10 +306,28 @@ def verify_api_key(api_key: str) -> bool:
 
 
 def generate_api_key() -> str:
+    """
+    Generate a secure random API key.
+    """
     return f"llm_{secrets.token_urlsafe(32)}"
 
 
-def add_api_key(api_key: str) -> None:
+def add_api_key(
+    api_key: str,
+    role: str = "user",
+) -> None:
+    """
+    Add a new API key.
+
+    New keys default to the 'user' role.
+    Admin keys can be created explicitly by passing role='admin'.
+    """
+
+    if role not in {"admin", "user"}:
+        raise ValueError(
+            "Invalid role. Allowed roles: admin, user"
+        )
+
     key_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc).isoformat()
 
@@ -304,6 +335,7 @@ def add_api_key(api_key: str) -> None:
         "key_id": key_id,
         "created_at": created_at,
         "active": True,
+        "role": role,
     }
 
     save_api_key(
@@ -311,15 +343,20 @@ def add_api_key(api_key: str) -> None:
         key_id=key_id,
         created_at=created_at,
         active=True,
+        role=role,
     )
 
     logger.info(
-        "API key added | key_id=%s",
+        "API key added | key_id=%s | role=%s",
         key_id,
+        role,
     )
 
 
 def revoke_api_key(api_key: str) -> bool:
+    """
+    Revoke an API key.
+    """
     metadata = get_api_key(api_key)
 
     if metadata is not None:
@@ -350,11 +387,19 @@ def revoke_api_key(api_key: str) -> bool:
 
 
 def rotate_api_key(old_api_key: str) -> str | None:
+    """
+    Revoke old API key and generate a new user API key.
+    """
+
     if not revoke_api_key(old_api_key):
         return None
 
     new_api_key = generate_api_key()
-    add_api_key(new_api_key)
+
+    add_api_key(
+        new_api_key,
+        role="user",
+    )
 
     metadata = get_api_key(new_api_key)
 
@@ -367,6 +412,10 @@ def rotate_api_key(old_api_key: str) -> str | None:
 
 
 def get_api_key_metadata(api_key: str) -> dict | None:
+    """
+    Return API key metadata including RBAC role.
+    """
+
     metadata = get_api_key(api_key)
 
     if metadata is not None:
@@ -374,6 +423,7 @@ def get_api_key_metadata(api_key: str) -> dict | None:
             "key_id": metadata.get("key_id"),
             "created_at": metadata.get("created_at"),
             "active": metadata.get("active"),
+            "role": metadata.get("role", "user"),
         }
 
     local_metadata = API_KEYS.get(api_key)
@@ -385,4 +435,5 @@ def get_api_key_metadata(api_key: str) -> dict | None:
         "key_id": local_metadata["key_id"],
         "created_at": local_metadata["created_at"],
         "active": local_metadata["active"],
+        "role": local_metadata.get("role", "user"),
     }
