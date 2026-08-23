@@ -28,7 +28,15 @@ UNSAFE_OUTPUT_PATTERNS = {
 
     "CREDENTIAL_LEAK": [
         re.compile(
-            r"\b(?:authorization|bearer)\s*[:=]\s*\S+",
+            r"\bauthorization\s*:\s*bearer\s+\S+",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"\bbearer\s*[:=]\s*\S+",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"\bauthorization\s*[:=]\s*\S+",
             re.IGNORECASE,
         ),
     ],
@@ -44,9 +52,11 @@ UNSAFE_OUTPUT_PATTERNS = {
 
     "MALICIOUS_CODE_OUTPUT": [
         re.compile(
-            r"\b(?:rm\s+-rf\s+/|format\s+c:|"
-            r"del\s+/f\s+/s\s+/q\s+c:\\|"
-            r"drop\s+database|drop\s+table)\b",
+            r"(?:\brm\s+-rf\s+/)"
+            r"|(?:\bformat\s+c:)"
+            r"|(?:\bdel\s+/f\s+/s\s+/q\s+c:\\)"
+            r"|(?:\bdrop\s+database\b)"
+            r"|(?:\bdrop\s+table\b)",
             re.IGNORECASE,
         ),
     ],
@@ -62,17 +72,12 @@ def detect_unsafe_output(output: str) -> list[str]:
     detected_types = []
 
     for category, patterns in UNSAFE_OUTPUT_PATTERNS.items():
-
         for pattern in patterns:
-
             if pattern.search(output):
-
                 detected_types.append(category)
-
                 break
 
     if detected_types:
-
         logger.warning(
             "Unsafe output detected | types=%s",
             ",".join(detected_types),
@@ -97,9 +102,7 @@ def redact_unsafe_output(output: str) -> str:
     }
 
     for category, patterns in UNSAFE_OUTPUT_PATTERNS.items():
-
         for pattern in patterns:
-
             sanitized_output = pattern.sub(
                 replacements[category],
                 sanitized_output,
