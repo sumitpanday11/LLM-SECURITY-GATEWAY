@@ -27,7 +27,9 @@ def is_auth_blocked(client_id: str) -> bool:
         return redis_client.exists(key) == 1
 
     except redis.RedisError:
-        logger.exception("Redis authentication protection error")
+        logger.exception(
+            "Redis authentication protection error"
+        )
         return True
 
 
@@ -38,7 +40,10 @@ def record_failed_attempt(client_id: str) -> bool:
         attempts = redis_client.incr(key)
 
         if attempts == 1:
-            redis_client.expire(key, BLOCK_SECONDS)
+            redis_client.expire(
+                key,
+                BLOCK_SECONDS,
+            )
 
         if attempts >= MAX_FAILED_ATTEMPTS:
             block_key = f"auth_block:{client_id}"
@@ -50,7 +55,8 @@ def record_failed_attempt(client_id: str) -> bool:
             )
 
             logger.warning(
-                "Authentication temporarily blocked | client_id=%s",
+                "Authentication temporarily blocked | "
+                "client_id=%s",
                 client_id,
             )
 
@@ -59,15 +65,29 @@ def record_failed_attempt(client_id: str) -> bool:
         return False
 
     except redis.RedisError:
-        logger.exception("Redis authentication protection error")
+        logger.exception(
+            "Redis authentication protection error"
+        )
         return True
 
 
 def clear_failed_attempts(client_id: str) -> None:
-    key = f"auth_fail:{client_id}"
+    failed_key = f"auth_fail:{client_id}"
+    block_key = f"auth_block:{client_id}"
 
     try:
-        redis_client.delete(key)
+        redis_client.delete(
+            failed_key,
+            block_key,
+        )
+
+        logger.info(
+            "Authentication failure state cleared | "
+            "client_id=%s",
+            client_id,
+        )
 
     except redis.RedisError:
-        logger.exception("Redis authentication counter reset error")
+        logger.exception(
+            "Redis authentication counter reset error"
+        )
