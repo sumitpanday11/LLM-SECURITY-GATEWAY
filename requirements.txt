@@ -5,3 +5,4 @@ psycopg2-binary
 prometheus-client
 pytest
 psycopg[binary]
+httpx2

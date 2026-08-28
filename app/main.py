@@ -38,6 +38,8 @@ from app.audit_log import log_security_event
 
 from app.threat_intelligence import is_ip_threatened
 
+from app.llm_firewall import inspect_prompt
+
 from app.output_filter import filter_unsafe_output
 
 from app.semantic_cache import (
@@ -1166,7 +1168,50 @@ def chat(
         )
 
     # ========================================================
-    # 9. ADVANCED PROMPT INJECTION DETECTION
+    # 9. LLM FIREWALL POLICY ENGINE
+    # ========================================================
+
+    firewall_result = inspect_prompt(
+        sanitized_prompt
+    )
+
+    if not firewall_result.allowed:
+
+        logger.warning(
+            "LLM firewall blocked request | "
+            "request_id=%s | rule=%s",
+            request_id,
+            firewall_result.rule,
+        )
+
+        log_security_event(
+            event="LLM_FIREWALL_BLOCK",
+            request_id=request_id,
+            details=(
+                f"Firewall rule triggered: "
+                f"{firewall_result.rule}"
+            ),
+        )
+
+        record_security_metric(
+            "LLM_FIREWALL_BLOCK"
+        )
+
+        record_blocked_metric(
+            "LLM_FIREWALL"
+        )
+
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": firewall_result.reason,
+                "rule": firewall_result.rule,
+                "request_id": request_id,
+            },
+        )    
+
+    # ========================================================
+    # 10. ADVANCED PROMPT INJECTION DETECTION
     # ========================================================
 
     if detect_prompt_injection(
@@ -1204,7 +1249,7 @@ def chat(
         )
 
     # ========================================================
-    # 10. SIMULATED LLM OUTPUT
+    # 11. SIMULATED LLM OUTPUT
     # ========================================================
 
     llm_output = (
@@ -1214,7 +1259,7 @@ def chat(
     )
 
     # ========================================================
-    # 11. UNSAFE OUTPUT FILTERING
+    # 12. UNSAFE OUTPUT FILTERING
     # ========================================================
 
     (
@@ -1249,7 +1294,7 @@ def chat(
         )
 
     # ========================================================
-    # 12. REQUEST ACCEPTED
+    # 13. REQUEST ACCEPTED
     # ========================================================
 
     logger.info(
@@ -1289,7 +1334,7 @@ def chat(
     }
 
     # ========================================================
-    # 13. SEMANTIC CACHE SAVE
+    # 14. SEMANTIC CACHE SAVE
     # ========================================================
 
     cache_response = response_data.copy()
