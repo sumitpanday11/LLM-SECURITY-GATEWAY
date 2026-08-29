@@ -40,6 +40,8 @@ from app.threat_intelligence import is_ip_threatened
 
 from app.llm_firewall import inspect_prompt
 
+from app.risk_scoring import calculate_prompt_risk
+
 from app.output_filter import filter_unsafe_output
 
 from app.semantic_cache import (
@@ -1166,9 +1168,43 @@ def chat(
         sanitized_prompt = redact_phi(
             sanitized_prompt
         )
+    
+    # ========================================================
+    # 9. PROMPT RISK SCORING
+    # ========================================================
+
+    risk_result = calculate_prompt_risk(
+        sanitized_prompt
+    )
+
+    risk_score = risk_result.score
+    risk_level = risk_result.level
+    risk_reasons = risk_result.reasons
+
+    logger.info(
+        "Prompt risk calculated | "
+        "request_id=%s | score=%s | level=%s",
+        request_id,
+        risk_score,
+        risk_level,
+    )
+
+    log_security_event(
+        event="PROMPT_RISK_SCORED",
+        request_id=request_id,
+        details=(
+            f"Risk score={risk_score} | "
+            f"level={risk_level} | "
+            f"reasons={','.join(risk_reasons)}"
+        ),
+    )
+
+    record_security_metric(
+        "PROMPT_RISK_SCORED"
+    )
 
     # ========================================================
-    # 9. LLM FIREWALL POLICY ENGINE
+    # 10. LLM FIREWALL POLICY ENGINE
     # ========================================================
 
     firewall_result = inspect_prompt(
@@ -1206,12 +1242,15 @@ def chat(
             detail={
                 "message": firewall_result.reason,
                 "rule": firewall_result.rule,
+                "risk_score": risk_score,
+                "risk_level": risk_level,
+                "risk_reasons": risk_reasons,
                 "request_id": request_id,
             },
         )    
 
     # ========================================================
-    # 10. ADVANCED PROMPT INJECTION DETECTION
+    # 11. ADVANCED PROMPT INJECTION DETECTION
     # ========================================================
 
     if detect_prompt_injection(
@@ -1249,7 +1288,7 @@ def chat(
         )
 
     # ========================================================
-    # 11. SIMULATED LLM OUTPUT
+    # 12. SIMULATED LLM OUTPUT
     # ========================================================
 
     llm_output = (
@@ -1259,7 +1298,7 @@ def chat(
     )
 
     # ========================================================
-    # 12. UNSAFE OUTPUT FILTERING
+    # 13. UNSAFE OUTPUT FILTERING
     # ========================================================
 
     (
@@ -1294,7 +1333,7 @@ def chat(
         )
 
     # ========================================================
-    # 13. REQUEST ACCEPTED
+    # 14. REQUEST ACCEPTED
     # ========================================================
 
     logger.info(
@@ -1320,6 +1359,9 @@ def chat(
     response_data = {
         "blocked": False,
         "prompt": sanitized_prompt,
+        "risk_score": risk_score,
+        "risk_level": risk_level,
+        "risk_reasons": risk_reasons,
         "output": sanitized_output,
         "output_threats": (
             detected_output_threats
@@ -1334,7 +1376,7 @@ def chat(
     }
 
     # ========================================================
-    # 14. SEMANTIC CACHE SAVE
+    # 15. SEMANTIC CACHE SAVE
     # ========================================================
 
     cache_response = response_data.copy()
