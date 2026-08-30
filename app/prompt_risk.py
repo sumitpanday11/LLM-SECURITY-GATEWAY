@@ -1,5 +1,6 @@
 import re
 from dataclasses import dataclass
+from app.jailbreak_detection import detect_jailbreak
 
 
 @dataclass
@@ -98,4 +99,29 @@ def calculate_prompt_risk(prompt: str) -> PromptRiskResult:
         score=score,
         level=_get_risk_level(score),
         reasons=reasons,
+    )
+
+def calculate_combined_prompt_risk(prompt: str) -> PromptRiskResult:
+    """
+    Combine prompt risk scoring with jailbreak detection.
+    """
+
+    base_result = calculate_prompt_risk(prompt)
+    jailbreak_result = detect_jailbreak(prompt)
+
+    combined_score = min(
+        base_result.score + jailbreak_result.score,
+        100,
+    )
+
+    combined_reasons = list(base_result.reasons)
+
+    for reason in jailbreak_result.reasons:
+        if reason not in combined_reasons:
+            combined_reasons.append(reason)
+
+    return PromptRiskResult(
+        score=combined_score,
+        level=_get_risk_level(combined_score),
+        reasons=combined_reasons,
     )
