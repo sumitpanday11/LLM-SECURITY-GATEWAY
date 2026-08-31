@@ -44,6 +44,8 @@ from app.risk_scoring import calculate_prompt_risk
 
 from app.output_filter import filter_unsafe_output
 
+from app.secret_detection import detect_secrets
+
 from app.semantic_cache import (
     get_cached_response,
     save_cached_response,
@@ -1307,6 +1309,41 @@ def chat(
     ) = filter_unsafe_output(
         llm_output
     )
+
+    # ========================================================
+    # 13.5 SECRET / CREDENTIAL LEAK DETECTION
+    # ========================================================
+
+    secret_result = detect_secrets(
+        sanitized_output
+    )
+
+    if secret_result.detected:
+
+        logger.warning(
+            "Secret detected in LLM output | "
+            "request_id=%s | count=%s",
+            request_id,
+            len(secret_result.secrets),
+        )
+
+        log_security_event(
+            event="SECRET_LEAK_DETECTED",
+            request_id=request_id,
+            details=(
+                f"Secret/credential detected in "
+                f"LLM output | count="
+                f"{len(secret_result.secrets)}"
+            ),
+        )
+
+        record_security_metric(
+            "SECRET_LEAK_DETECTED"
+        )
+
+        sanitized_output = (
+            secret_result.redacted_text
+        )
 
     if detected_output_threats:
 
