@@ -46,6 +46,8 @@ from app.output_filter import filter_unsafe_output
 
 from app.secret_detection import detect_secrets
 
+from app.incident_correlation import correlate_security_events
+
 from app.semantic_cache import (
     get_cached_response,
     save_cached_response,
@@ -1367,6 +1369,41 @@ def chat(
 
         record_security_metric(
             "UNSAFE_OUTPUT_DETECTED"
+        )
+    
+    # ========================================================
+    # 13.8 SECURITY INCIDENT CORRELATION
+    # ========================================================
+
+    incident_result = correlate_security_events(
+        api_key=x_api_key,
+        client_ip=client_id,
+    )
+
+    if incident_result.incident_detected:
+
+        logger.warning(
+            "Security incident detected | "
+            "request_id=%s | event_count=%s | risk_level=%s",
+            request_id,
+            incident_result.event_count,
+            incident_result.risk_level,
+        )
+
+        log_security_event(
+            event="SECURITY_INCIDENT_DETECTED",
+            request_id=request_id,
+            details=(
+                f"Correlated security incident | "
+                f"event_count={incident_result.event_count} | "
+                f"risk_level={incident_result.risk_level} | "
+                f"reason={incident_result.correlation_reason}"
+            ),
+            severity=incident_result.risk_level,
+        )
+
+        record_security_metric(
+            "SECURITY_INCIDENT_DETECTED"
         )
 
     # ========================================================
