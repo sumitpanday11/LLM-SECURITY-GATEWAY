@@ -108,10 +108,10 @@ def save_cached_response(
     }
 
     try:
-        redis_client.setex(
+        redis_client.set(
             cache_key,
-            SEMANTIC_CACHE_TTL_SECONDS,
             json.dumps(cache_entry),
+            ex=SEMANTIC_CACHE_TTL_SECONDS,
         )
 
         logger.info(
