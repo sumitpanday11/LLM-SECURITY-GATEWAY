@@ -1,978 +1,755 @@
-\# LLM Security Gateway - API Documentation
+# LLM Security Gateway API Documentation
 
+## Overview
 
+The LLM Security Gateway provides a FastAPI-based security layer for LLM and GenAI applications.
 
-\## Overview
+The API applies authentication, authorization, rate limiting, input validation, threat detection, prompt security, output filtering, auditing, monitoring, and security incident correlation.
 
-
-
-The LLM Security Gateway provides security controls for LLM and GenAI applications through a FastAPI-based API.
-
-
-
-The gateway provides authentication, authorization, API key management, rate limiting, security validation, audit logging, monitoring, and protected LLM request processing.
-
-
-
-\## Base URL
-
-
+## Base URL
 
 ```text
-
 http://127.0.0.1:8000
-
 ```
 
+---
 
+## 1. Gateway Information
 
-\---
-
-
-
-\## API Endpoints
-
-
-
-\### 1. Gateway Information
-
-
-
-\*\*Endpoint\*\*
-
-
+### Endpoint
 
 ```http
-
 GET /
-
 ```
 
-
-
-\*\*Description\*\*
-
-
+### Description
 
 Returns basic information about the LLM Security Gateway.
 
-
-
-\*\*Example\*\*
-
-
+### Example
 
 ```powershell
-
 curl.exe http://127.0.0.1:8000/
-
 ```
 
+### Example Response
 
+```json
+{
+  "message": "LLM Security Gateway is running",
+  "version": "0.5.0"
+}
+```
 
-\---
+---
 
+## 2. Health Check
 
-
-\### 2. Health Check
-
-
-
-\*\*Endpoint\*\*
-
-
+### Endpoint
 
 ```http
-
 GET /health
-
 ```
 
-
-
-\*\*Description\*\*
-
-
+### Description
 
 Checks whether the gateway application is running correctly.
 
-
-
-\*\*Example\*\*
-
-
+### Example
 
 ```powershell
-
 curl.exe http://127.0.0.1:8000/health
-
 ```
 
-
-
-\*\*Example Response\*\*
-
-
+### Example Response
 
 ```json
-
 {
-
-&#x20; "status": "healthy",
-
-&#x20; "service": "llm-security-gateway"
-
+  "status": "healthy",
+  "service": "llm-security-gateway"
 }
-
 ```
 
+---
 
+## 3. Prometheus Metrics
 
-\---
-
-
-
-\### 3. Prometheus Metrics
-
-
-
-\*\*Endpoint\*\*
-
-
+### Endpoint
 
 ```http
-
 GET /metrics
-
 ```
 
+### Description
 
+Returns application and security metrics in Prometheus-compatible format.
 
-\*\*Description\*\*
-
-
-
-Returns application metrics in Prometheus-compatible format.
-
-
-
-\*\*Example\*\*
-
-
+### Example
 
 ```powershell
-
 curl.exe http://127.0.0.1:8000/metrics
-
 ```
 
+---
 
+## 4. Database Health Check
 
-\---
-
-
-
-\### 4. Database Health Check
-
-
-
-\*\*Endpoint\*\*
-
-
+### Endpoint
 
 ```http
-
 GET /health/database
-
 ```
 
+### Description
 
+Checks PostgreSQL database connectivity.
 
-\*\*Description\*\*
-
-
-
-Checks the connectivity and health of the PostgreSQL database used by the gateway.
-
-
-
-\*\*Example\*\*
-
-
+### Example
 
 ```powershell
-
 curl.exe http://127.0.0.1:8000/health/database
-
 ```
 
+### Success Response
 
+```json
+{
+  "status": "healthy",
+  "database": [
+    "llm_security_gateway",
+    "postgres"
+  ]
+}
+```
 
-\---
+### Failure
 
+If PostgreSQL is unavailable, the endpoint returns HTTP `503`.
 
+---
 
-\## API Key Management
+# API Key Management
 
+## 5. API Key Information
 
-
-\### 5. API Key Information
-
-
-
-\*\*Endpoint\*\*
-
-
+### Endpoint
 
 ```http
-
 GET /keys/info
-
 ```
 
+### Authentication
 
+Requires a valid API key with the appropriate `key_info` permission.
 
-\*\*Description\*\*
-
-
-
-Returns information related to API key management.
-
-
-
-\*\*Authentication\*\*
-
-
-
-This endpoint requires valid API key authentication and appropriate authorization.
-
-
-
-\*\*Header\*\*
-
-
+### Header
 
 ```text
-
-x-api-key: <API\_KEY>
-
+x-api-key: <API_KEY>
 ```
 
-
-
-\*\*Example\*\*
-
-
+### Example
 
 ```powershell
-
 curl.exe -X GET "http://127.0.0.1:8000/keys/info" `
-
-\-H "x-api-key: dev-secret-key"
-
+-H "x-api-key: dev-secret-key"
 ```
 
+### Response
 
+```json
+{
+  "key_id": "example-key-id",
+  "created_at": "timestamp",
+  "active": true,
+  "role": "admin",
+  "request_id": "request-uuid"
+}
+```
 
-\---
+---
 
+## 6. Generate API Key
 
-
-\### 6. Generate API Key
-
-
-
-\*\*Endpoint\*\*
-
-
+### Endpoint
 
 ```http
-
 POST /keys/generate
-
 ```
 
+### Description
 
+Generates a new user API key.
 
-\*\*Description\*\*
+### Authentication
 
+Requires a valid API key with the appropriate `key_generate` permission.
 
-
-Generates a new API key for authorized users.
-
-
-
-\*\*Authentication\*\*
-
-
-
-Requires a valid API key and appropriate authorization.
-
-
-
-\*\*Header\*\*
-
-
+### Header
 
 ```text
-
-x-api-key: <API\_KEY>
-
+x-api-key: <API_KEY>
 ```
 
-
-
-\*\*Example\*\*
-
-
+### Example
 
 ```powershell
-
 curl.exe -X POST "http://127.0.0.1:8000/keys/generate" `
-
-\-H "x-api-key: dev-secret-key"
-
+-H "x-api-key: dev-secret-key"
 ```
 
+### Response
 
+```json
+{
+  "message": "API key generated successfully",
+  "api_key": "<GENERATED_API_KEY>",
+  "role": "user",
+  "created_by_role": "admin",
+  "request_id": "request-uuid"
+}
+```
 
-\---
+> Generated API keys should be treated as secrets and must not be committed to source control.
 
+---
 
+## 7. Revoke API Key
 
-\### 7. Revoke API Key
-
-
-
-\*\*Endpoint\*\*
-
-
+### Endpoint
 
 ```http
-
 POST /keys/revoke
-
 ```
 
+### Description
 
+Revokes an existing API key.
 
-\*\*Description\*\*
+### Authentication
 
+Requires a valid API key with the appropriate `key_revoke` permission.
 
-
-Revokes an existing API key so that it can no longer be used for authentication.
-
-
-
-\*\*Authentication\*\*
-
-
-
-Requires a valid API key and appropriate authorization.
-
-
-
-\*\*Header\*\*
-
-
+### Header
 
 ```text
-
-x-api-key: <API\_KEY>
-
+x-api-key: <API_KEY>
 ```
 
+### Query Parameter
 
+```text
+old_api_key=<API_KEY_TO_REVOKE>
+```
 
-\*\*Example\*\*
-
-
+### Example
 
 ```powershell
-
-curl.exe -X POST "http://127.0.0.1:8000/keys/revoke" `
-
-\-H "x-api-key: dev-secret-key" `
-
-\-H "Content-Type: application/json"
-
+curl.exe -X POST "http://127.0.0.1:8000/keys/revoke?old_api_key=<API_KEY_TO_REVOKE>" `
+-H "x-api-key: dev-secret-key"
 ```
 
+### Success Response
 
+```json
+{
+  "message": "API key revoked successfully",
+  "performed_by_role": "admin",
+  "request_id": "request-uuid"
+}
+```
 
-> The request body must contain the parameters required by the current API implementation.
+---
 
+## 8. Rotate API Key
 
-
-\---
-
-
-
-\### 8. Rotate API Key
-
-
-
-\*\*Endpoint\*\*
-
-
+### Endpoint
 
 ```http
-
 POST /keys/rotate
-
 ```
 
+### Description
 
+Revokes/replaces an existing API key and returns a new API key.
 
-\*\*Description\*\*
+### Authentication
 
+Requires a valid API key with the appropriate `key_rotate` permission.
 
-
-Rotates an existing API key and creates a replacement key.
-
-
-
-\*\*Authentication\*\*
-
-
-
-Requires a valid API key and appropriate authorization.
-
-
-
-\*\*Header\*\*
-
-
+### Header
 
 ```text
-
-x-api-key: <API\_KEY>
-
+x-api-key: <API_KEY>
 ```
 
+### Request Body
 
+```json
+{
+  "old_api_key": "<API_KEY_TO_ROTATE>"
+}
+```
 
-\*\*Example\*\*
-
-
+### Example
 
 ```powershell
-
 curl.exe -X POST "http://127.0.0.1:8000/keys/rotate" `
-
-\-H "x-api-key: dev-secret-key" `
-
-\-H "Content-Type: application/json"
-
+-H "x-api-key: dev-secret-key" `
+-H "Content-Type: application/json" `
+-d '{"old_api_key":"<API_KEY_TO_ROTATE>"}'
 ```
 
+### Success Response
 
+```json
+{
+  "message": "API key rotated successfully",
+  "new_api_key": "<NEW_API_KEY>",
+  "role": "user",
+  "rotated_by_role": "admin",
+  "request_id": "request-uuid"
+}
+```
 
-> The request body must contain the parameters required by the current API implementation.
+---
 
+# LLM Chat Endpoint
 
+## 9. Chat
 
-\---
-
-
-
-\## LLM Chat Endpoint
-
-
-
-\### 9. Chat
-
-
-
-\*\*Endpoint\*\*
-
-
+### Endpoint
 
 ```http
-
 POST /chat
-
 ```
 
-
-
-\*\*Description\*\*
-
-
+### Description
 
 Processes an LLM request through the security gateway.
 
+The request passes through multiple security controls including:
 
+1. Threat intelligence check
+2. Authentication protection
+3. API key authentication
+4. RBAC authorization
+5. Semantic cache lookup
+6. Redis rate limiting
+7. PII detection and redaction
+8. PHI detection and redaction
+9. Prompt risk scoring
+10. LLM firewall policy inspection
+11. Prompt injection detection
+12. LLM/application processing
+13. Unsafe output filtering
+14. Secret/credential leak detection
+15. Security incident correlation
+16. Security event logging
+17. Semantic cache storage
 
-Before processing the request, the gateway applies multiple security controls including authentication, authorization, rate limiting, input validation, prompt injection detection, and security monitoring.
-
-
-
-\*\*Authentication\*\*
-
-
+### Authentication
 
 Requires a valid API key.
 
-
-
-\*\*Headers\*\*
-
-
+### Headers
 
 ```text
-
-x-api-key: <API\_KEY>
-
+x-api-key: <API_KEY>
 Content-Type: application/json
-
 ```
 
-
-
-\*\*Request Body\*\*
-
-
+### Request Body
 
 ```json
-
 {
-
-&#x20; "prompt": "Hello gateway"
-
+  "prompt": "Hello gateway"
 }
-
 ```
 
+### Prompt Restrictions
 
+The `prompt` field:
 
-\*\*Example Request\*\*
+* Must contain at least 1 character.
+* Must not exceed 4000 characters.
+* Must be provided as a valid JSON request.
 
-
+### Example Request
 
 ```powershell
-
 curl.exe -X POST "http://127.0.0.1:8000/chat" `
-
-\-H "x-api-key: dev-secret-key" `
-
-\-H "Content-Type: application/json" `
-
-\-d "{\\"prompt\\":\\"Hello gateway\\"}"
-
+-H "x-api-key: dev-secret-key" `
+-H "Content-Type: application/json" `
+-d '{"prompt":"Hello gateway"}'
 ```
 
-
-
-\*\*Example Response\*\*
-
-
+### Example Successful Response
 
 ```json
-
 {
-
-&#x20; "blocked": false,
-
-&#x20; "prompt": "Hello gateway",
-
-&#x20; "output": "Request processed successfully."
-
+  "blocked": false,
+  "prompt": "Hello gateway",
+  "risk_score": 0,
+  "risk_level": "Low",
+  "risk_reasons": [],
+  "output": "Request processed successfully. The gateway did not expose any internal credentials.",
+  "output_threats": [],
+  "role": "user",
+  "message": "Request processed by LLM Security Gateway",
+  "cached": false,
+  "request_id": "request-uuid"
 }
-
 ```
 
+### Cached Response
 
+If a matching semantic cache entry is available, the gateway can return a cached response with:
 
-> The exact response fields may vary depending on the security checks and current application implementation.
-
-
-
-\---
-
-
-
-\## Authentication
-
-
-
-Protected endpoints use API key authentication.
-
-
-
-The API key must be supplied using the following HTTP header:
-
-
-
-```text
-
-x-api-key: <API\_KEY>
-
+```json
+{
+  "cached": true
+}
 ```
 
+The response also includes the current request ID and role.
 
+---
 
-Requests with missing or invalid API keys are rejected by the gateway.
+# Security Controls
 
-
-
-\---
-
-
-
-\## Security Controls
-
-
-
-The API layer is protected by multiple security controls.
-
-
-
-\### API Key Authentication
-
-
+## API Key Authentication
 
 Validates API keys before allowing access to protected resources.
 
+The gateway supports API key persistence, validation, rotation, and revocation.
 
+## RBAC
 
-\### API Key Rotation and Revocation
+Role-Based Access Control restricts protected operations according to assigned permissions.
 
+## Redis Rate Limiting
 
+Redis-based rate limiting controls excessive requests and helps reduce abuse.
 
-Provides mechanisms to rotate and revoke API keys.
+## Authentication Protection
 
+Repeated failed authentication attempts can temporarily block a client.
 
+## Request Validation
 
-\### Role-Based Access Control
+Pydantic validation enforces request structure and prompt length restrictions.
 
+## Payload Size Limiting
 
+`/chat` requests larger than 1 MB are rejected.
 
-RBAC restricts sensitive operations based on user roles and permissions.
-
-
-
-\### Redis-Based Rate Limiting
-
-
-
-Limits excessive requests and helps protect the gateway against abuse.
-
-
-
-\### Input Validation
-
-
-
-Validates incoming request data and enforces prompt length and format restrictions.
-
-
-
-\### Prompt Injection Detection
-
-
-
-Analyzes incoming prompts for suspicious patterns associated with prompt injection attacks.
-
-
-
-\### Output Filtering
-
-
-
-Security checks are also applied to generated output before it is returned to the client.
-
-
-
-\### Content-Type Enforcement
-
-
-
-Protected JSON endpoints require the appropriate `Content-Type` header.
-
-
-
-\### Request Payload Size Limiting
-
-
-
-Large request payloads are rejected to reduce abuse and resource exhaustion risks.
-
-
-
-\### CORS Security
-
-
-
-Cross-Origin Resource Sharing is configured with security restrictions.
-
-
-
-\### Security Response Headers
-
-
-
-The gateway applies security headers including:
-
-
+### Response
 
 ```text
-
-X-Content-Type-Options: nosniff
-
-X-Frame-Options: DENY
-
-Referrer-Policy: no-referrer
-
-Cache-Control: no-store
-
+413 Payload Too Large
 ```
 
+## Content-Type Enforcement
 
+The `/chat` endpoint requires:
 
-\### Request Correlation IDs
+```text
+Content-Type: application/json
+```
 
+Invalid content types return:
 
+```text
+415 Unsupported Media Type
+```
 
-Requests are assigned correlation identifiers to improve tracing and security investigation.
+## CORS Security
 
+CORS is configured with restricted origins and allowed HTTP methods and headers.
 
+## Security Response Headers
 
-\### Global Exception Handling
+The gateway applies:
 
+```text
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Referrer-Policy: no-referrer
+Cache-Control: no-store
+```
 
+## Request Correlation IDs
 
-Unhandled application exceptions are processed through centralized exception handling.
+Each request receives a unique request identifier.
 
+The identifier is returned using:
 
+```text
+X-Request-ID
+```
 
-\### Audit Logging
+The same request ID is also included in relevant response and security event data.
 
+## Threat Intelligence
 
+Client IP addresses can be checked against configured threat-intelligence rules.
 
-Security-related events are recorded for auditing and investigation.
+Threatened clients can be blocked with HTTP `403`.
 
+## PII Detection and Redaction
 
+Incoming prompts are inspected for personally identifiable information.
 
-\### PostgreSQL Integration
+Detected PII can be redacted before further processing.
 
+## PHI Detection and Redaction
 
+Incoming prompts are inspected for protected health information.
 
-PostgreSQL is used for persistent audit and security-related data.
+Detected PHI can be redacted before further processing.
 
+## Prompt Risk Scoring
 
+Prompts receive a security risk score and severity classification.
 
-\### Prometheus Metrics
+Risk levels include:
 
+* Low
+* Medium
+* High
+* Critical
 
+## LLM Firewall / Policy Engine
 
-The `/metrics` endpoint exposes application metrics in Prometheus-compatible format.
+Incoming prompts are inspected against configurable security policies.
 
+A blocked request returns HTTP `403` with firewall and risk information.
 
+## Prompt Injection Detection
 
-\---
+Prompts are inspected for suspicious patterns associated with prompt injection attacks.
 
+Detected prompt injection attempts can be blocked.
 
+## Jailbreak Detection
 
-\## Common HTTP Status Codes
+The project includes jailbreak detection capability as part of its LLM security controls.
 
+Jailbreak-style attempts are treated as suspicious prompt behavior and can contribute to security risk evaluation.
 
+## Secret / Credential Leak Detection
 
-| Status Code | Meaning                            |
+LLM output is inspected for sensitive credential patterns including:
 
-| ----------- | ---------------------------------- |
+* API keys
+* Tokens
+* Bearer tokens
+* Passwords
+* Other secret-like values
 
-| `200`       | Request successful                 |
+Detected secrets can be redacted before the response is returned.
 
-| `201`       | Resource successfully created      |
+## Unsafe Output Filtering
 
-| `400`       | Bad request                        |
+Generated output is inspected for unsafe or sensitive content before being returned to the client.
 
-| `401`       | Authentication required or invalid |
+Detected output threats are included in the response metadata where applicable.
 
-| `403`       | Access forbidden                   |
+## Semantic Cache
 
-| `404`       | Resource not found                 |
+Semantically similar requests can use cached responses where applicable.
 
-| `415`       | Unsupported Media Type             |
+Cached responses include a `cached` indicator.
 
-| `422`       | Validation error                   |
+## Security Event Logging
 
-| `429`       | Rate limit exceeded                |
+Security-relevant events are recorded for monitoring and investigation.
 
-| `500`       | Internal server error              |
+## PostgreSQL Audit Logging
 
-| `413`       | Request payload too large          |
+Security and audit information can be stored persistently in PostgreSQL.
 
+## Security Incident Correlation
 
+Related security events can be correlated using API-key and client-IP context to identify potentially connected suspicious activity.
 
-\---
+## Prometheus Monitoring
 
+Prometheus-compatible metrics are exposed through:
 
+```text
+GET /metrics
+```
 
-\## Testing the API
+---
 
+# Common HTTP Status Codes
 
+| Status Code | Meaning                                           |
+| ----------- | ------------------------------------------------- |
+| `200`       | Request successful                                |
+| `201`       | Resource successfully created                     |
+| `400`       | Bad request                                       |
+| `401`       | Invalid or missing authentication                 |
+| `403`       | Request blocked or access forbidden               |
+| `404`       | Resource not found                                |
+| `413`       | Request payload too large                         |
+| `415`       | Unsupported media type                            |
+| `422`       | Request validation error                          |
+| `429`       | Rate limit or authentication protection triggered |
+| `500`       | Internal server error                             |
+| `503`       | PostgreSQL database unavailable                   |
+| `504`       | Request processing timeout                        |
+
+---
+
+# Error Response Examples
+
+## Invalid API Key
+
+```json
+{
+  "detail": "Invalid or missing API key"
+}
+```
+
+## Rate Limit
+
+```json
+{
+  "detail": "Too many requests. Please try again later."
+}
+```
+
+## Prompt Injection
+
+```json
+{
+  "detail": "Potential prompt injection detected"
+}
+```
+
+## Firewall Block
+
+```json
+{
+  "detail": {
+    "message": "Request blocked by security policy",
+    "rule": "example-rule",
+    "risk_score": 80,
+    "risk_level": "High",
+    "risk_reasons": [],
+    "request_id": "request-uuid"
+  }
+}
+```
+
+## Payload Too Large
+
+```json
+{
+  "error": "Payload Too Large",
+  "message": "Request body must not exceed 1 MB",
+  "request_id": "request-uuid"
+}
+```
+
+---
+
+# Testing the API
 
 Start the application:
 
-
-
 ```powershell
-
 uvicorn app.main:app --reload
-
 ```
-
-
 
 Run the automated test suite:
 
-
-
 ```powershell
-
 pytest -q
-
 ```
-
-
 
 Health check:
 
-
-
 ```powershell
-
 curl.exe http://127.0.0.1:8000/health
-
 ```
-
-
 
 Protected chat request:
 
-
-
 ```powershell
-
 curl.exe -X POST "http://127.0.0.1:8000/chat" `
-
-\-H "x-api-key: dev-secret-key" `
-
-\-H "Content-Type: application/json" `
-
-\-d "{\\"prompt\\":\\"Hello gateway\\"}"
-
+-H "x-api-key: dev-secret-key" `
+-H "Content-Type: application/json" `
+-d '{"prompt":"Hello gateway"}'
 ```
 
+---
 
-
-\---
-
-
-
-\## API Documentation Interface
-
-
+# Interactive API Documentation
 
 FastAPI automatically provides interactive API documentation.
 
-
-
-\### Swagger UI
-
-
+### Swagger UI
 
 ```text
-
 http://127.0.0.1:8000/docs
-
 ```
 
-
-
-\### ReDoc
-
-
+### ReDoc
 
 ```text
-
 http://127.0.0.1:8000/redoc
-
 ```
 
+These interfaces can be used to inspect and test the available API endpoints.
 
+---
 
-These interfaces can be used to inspect and test available API endpoints.
+# Security Testing Checklist
 
+The API should be tested for:
 
+* Invalid API keys
+* Missing API keys
+* Failed authentication protection
+* Unauthorized RBAC operations
+* API key generation
+* API key revocation
+* API key rotation
+* Rate limit enforcement
+* PII detection and redaction
+* PHI detection and redaction
+* Prompt injection attempts
+* Prompt risk scoring
+* LLM firewall policies
+* Jailbreak-style prompts
+* Secret and credential detection
+* Unsafe output filtering
+* Semantic cache behavior
+* Threat intelligence blocking
+* Invalid request payloads
+* Oversized requests
+* Unsupported content types
+* Database connectivity
+* Audit logging
+* Security incident correlation
+* Prometheus metrics
+* Security response headers
+* Request correlation IDs
 
-\---
+---
 
+# Project Information
 
-
-\## Security Testing
-
-
-
-The gateway should be tested for:
-
-
-
-\* Invalid API keys
-
-\* Missing API keys
-
-\* Unauthorized RBAC operations
-
-\* API key revocation
-
-\* API key rotation
-
-\* Rate limit enforcement
-
-\* Prompt injection attempts
-
-\* Invalid request payloads
-
-\* Oversized requests
-
-\* Unsupported content types
-
-\* CORS restrictions
-
-\* Database connectivity
-
-\* Audit logging
-
-\* Metrics availability
-
-\* Output security filtering
-
-
-
-\---
-
-
-
-\## Project
-
-
-
-\*\*LLM Security Gateway\*\*
-
-
+**LLM Security Gateway**
 
 Cyber Security Internship Project
 
+**Author:** Sumit Panday
 
+**Program:** B.Tech CSE Cyber Security
 
-\*\*Author:\*\* Sumit Panday
-
-
-
-\*\*Organization:\*\* Zaalima Development Pvt Ltd
-
-
-
+**Organization:** Zaalima Development Pvt Ltd

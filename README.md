@@ -2,14 +2,20 @@
 
 An enterprise-focused security gateway built with FastAPI to protect LLM and GenAI applications from common security threats.
 
+The gateway provides multiple security layers for authentication, authorization, request validation, prompt protection, secret detection, threat intelligence, output filtering, auditing, monitoring, and security incident correlation.
+
 ## Features
+
+### Authentication & Authorization
 
 * API Key Authentication
 * API Key Rotation and Revocation
 * Redis-Based API Key Persistence
-* Redis-Based Rate Limiting
 * Role-Based Access Control (RBAC)
-* Prompt Injection Detection
+
+### Request & API Security
+
+* Redis-Based Rate Limiting
 * Input Validation
 * Request Payload Size Limiting
 * Content-Type Enforcement
@@ -17,42 +23,94 @@ An enterprise-focused security gateway built with FastAPI to protect LLM and Gen
 * Security Response Headers
 * Request Correlation IDs
 * Global Exception Handling
+
+### LLM Security
+
+* LLM Firewall / Policy Engine
+* Prompt Injection Detection
+* Prompt Risk Scoring
+* Jailbreak Detection
+* Threat Intelligence Checks
+* Secret / Credential Leak Detection
+* Unsafe Output Filtering
+* Semantic Cache
+
+### Monitoring & Auditing
+
 * Security Event Logging
-* Audit Logging with PostgreSQL
+* Security Incident Correlation
+* PostgreSQL Audit Logging
 * Prometheus Metrics
+* Database Health Monitoring
+
+### Testing & Deployment
+
 * Automated Security Tests
+* Docker Support
+* Docker Compose Configuration
 
 ## Security Architecture
 
-The gateway validates and secures incoming requests before forwarding them for processing.
+The gateway applies multiple security controls before allowing requests to reach the LLM or application backend.
 
 ```text
-Client
-   |
-   v
-FastAPI Security Gateway
-   |
-   +--> API Key Authentication
-   |
-   +--> RBAC Authorization
-   |
-   +--> Rate Limiting (Redis)
-   |
-   +--> Input Validation
-   |
-   +--> Prompt Injection Detection
-   |
-   +--> Security Middleware
-   |
-   +--> Audit Logging (PostgreSQL)
-   |
-   +--> Metrics (Prometheus)
-   |
-   v
-LLM / Application Backend
+                         Client
+                           |
+                           v
+                  +-------------------+
+                  |   FastAPI Gateway  |
+                  +-------------------+
+                           |
+                           v
+                  API Key Authentication
+                           |
+                           v
+                    RBAC Authorization
+                           |
+                           v
+                  Redis Rate Limiting
+                           |
+                           v
+                   Request Validation
+                           |
+                           v
+                LLM Firewall / Policies
+                           |
+                           v
+                 Prompt Risk Scoring
+                           |
+                           v
+                 Jailbreak Detection
+                           |
+                           v
+              Prompt Injection Detection
+                           |
+                           v
+               Threat Intelligence
+                           |
+                           v
+                    LLM / Backend
+                           |
+                           v
+              Secret / Credential Detection
+                           |
+                           v
+                Unsafe Output Filtering
+                           |
+                           v
+                 Security Event Logging
+                           |
+              +------------+-------------+
+              |                          |
+              v                          v
+       PostgreSQL Audit            Prometheus
+           Storage                  Metrics
+              |
+              v
+       Incident Correlation
 ```
 
-For detailed architecture information, see [Architecture Documentation](docs/ARCHITECTURE.md).
+For detailed architecture information, see `docs/ARCHITECTURE.md`.
 
 ## Project Structure
 
@@ -66,24 +124,31 @@ LLM-SECURITY-GATEWAY/
 │   ├── api_key_store.py
 │   ├── rate_limit.py
 │   ├── rbac.py
+│   ├── prompt_risk.py
+│   ├── jailbreak_detection.py
+│   ├── secret_detection.py
+│   ├── threat_intelligence.py
+│   ├── output_filter.py
+│   ├── semantic_cache.py
 │   ├── database.py
 │   ├── audit_log.py
 │   ├── metrics.py
-│   ├── output_filter.py
-│   ├── semantic_cache.py
-│   ├── threat_intelligence.py
 │   └── ...
 │
 ├── tests/
 │   └── ...
 │
-├── logs/
-│
 ├── docs/
 │   └── ARCHITECTURE.md
 │
+├── logs/
+│
 ├── API_DOCUMENTATION.md
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
 ├── README.md
+├── .dockerignore
 └── .gitignore
 ```
 
@@ -95,6 +160,7 @@ LLM-SECURITY-GATEWAY/
 * Redis or Memurai
 * PostgreSQL
 * Prometheus Client
+* Docker (optional)
 
 ## Installation
 
@@ -117,12 +183,14 @@ venv\Scripts\Activate.ps1
 ### 3. Install Dependencies
 
 ```powershell
-pip install fastapi uvicorn redis psycopg2-binary prometheus-client pytest
+pip install -r requirements.txt
 ```
 
 ## Configuration
 
-Configure the required environment variables before running the application:
+Configure the required environment variables according to the local development environment.
+
+Example:
 
 ```text
 API_KEY=dev-secret-key
@@ -130,7 +198,9 @@ REDIS_HOST=localhost
 REDIS_PORT=6379
 ```
 
-Configure PostgreSQL connection settings according to your local environment.
+PostgreSQL connection settings should also be configured according to the local database environment.
+
+> Do not commit real API keys, passwords, tokens, or other credentials to the repository.
 
 ## Running the Application
 
@@ -140,7 +210,7 @@ Start the FastAPI application:
 uvicorn app.main:app --reload
 ```
 
-The application will start locally at:
+The application will be available at:
 
 ```text
 http://127.0.0.1:8000
@@ -151,7 +221,7 @@ http://127.0.0.1:8000
 | Method | Endpoint           | Description                    |
 | ------ | ------------------ | ------------------------------ |
 | GET    | `/`                | Gateway information            |
-| GET    | `/health`          | Health check                   |
+| GET    | `/health`          | Application health check       |
 | GET    | `/metrics`         | Prometheus metrics             |
 | GET    | `/health/database` | Database health check          |
 | GET    | `/keys/info`       | API key information            |
@@ -162,16 +232,24 @@ http://127.0.0.1:8000
 
 ## API Documentation
 
-Detailed API documentation is available in [API_DOCUMENTATION.md](API_DOCUMENTATION.md).
+Detailed API documentation is available in:
 
-The project also provides interactive FastAPI documentation:
+```text
+API_DOCUMENTATION.md
+```
 
-* Swagger UI: `/docs`
-* ReDoc: `/redoc`
+Interactive FastAPI documentation is also available:
+
+```text
+Swagger UI: http://127.0.0.1:8000/docs
+ReDoc:      http://127.0.0.1:8000/redoc
+```
 
 ## Authentication
 
 Protected endpoints require an API key.
+
+Example header:
 
 ```text
 x-api-key: dev-secret-key
@@ -183,34 +261,69 @@ x-api-key: dev-secret-key
 curl.exe -X POST "http://127.0.0.1:8000/chat" `
 -H "x-api-key: dev-secret-key" `
 -H "Content-Type: application/json" `
--d "{\"prompt\":\"Hello gateway\"}"
+-d '{"prompt":"Hello gateway"}'
 ```
 
 ## Security Controls
 
 ### API Key Security
 
-API keys are used to authenticate incoming requests. The project includes support for API key storage, rotation, and revocation.
+API keys authenticate requests to protected endpoints. The gateway supports API key persistence, rotation, revocation, and validation.
 
 ### Rate Limiting
 
-Redis-based rate limiting protects the gateway against excessive requests and abuse.
+Redis-based rate limiting helps protect the gateway against excessive requests and abuse.
 
-### Prompt Injection Protection
+### RBAC
 
-Incoming prompts are checked against suspicious patterns associated with prompt injection attempts.
+Role-Based Access Control restricts protected operations according to assigned permissions and user roles.
 
-### Role-Based Access Control
+### LLM Firewall / Policy Engine
 
-RBAC restricts access to protected resources based on assigned user roles.
+The LLM Firewall applies configurable security policies to incoming requests and determines whether a request should be allowed or blocked.
+
+### Prompt Injection Detection
+
+Incoming prompts are inspected for suspicious patterns associated with prompt injection attacks.
+
+### Prompt Risk Scoring
+
+Prompts receive a security risk score and severity classification based on detected suspicious behavior.
+
+Risk levels include:
+
+* Low
+* Medium
+* High
+* Critical
+
+### Jailbreak Detection
+
+The gateway detects common jailbreak-style attempts designed to bypass model safety instructions or security policies.
+
+### Secret / Credential Leak Detection
+
+Sensitive credentials and secret-like values such as API keys, tokens, passwords, and other credential patterns are detected and protected from being exposed through the gateway.
+
+### Threat Intelligence
+
+Security-related indicators and suspicious content can be checked against threat intelligence rules to improve detection of potentially malicious requests.
+
+### Unsafe Output Filtering
+
+LLM responses are inspected for unsafe or sensitive content before being returned to the client.
+
+### Semantic Cache
+
+Semantically similar requests can use cached responses where applicable, reducing unnecessary processing while maintaining gateway security controls.
 
 ### Request Validation
 
-Requests are validated using Pydantic to enforce valid input formats and size restrictions.
+Pydantic-based validation enforces valid request formats and input restrictions.
 
 ### Security Headers
 
-The gateway applies the following security headers:
+The gateway applies security-focused HTTP response headers including:
 
 * `X-Content-Type-Options: nosniff`
 * `X-Frame-Options: DENY`
@@ -221,9 +334,13 @@ The gateway applies the following security headers:
 
 Security-relevant events and requests can be recorded in PostgreSQL for auditing and investigation.
 
+### Security Incident Correlation
+
+Related security events can be correlated to help identify repeated or connected suspicious activity associated with the same request context.
+
 ### Monitoring
 
-Prometheus metrics are exposed through the `/metrics` endpoint for monitoring application activity.
+Prometheus metrics are exposed through the `/metrics` endpoint for monitoring gateway activity.
 
 ## Testing
 
@@ -233,22 +350,68 @@ Run the automated test suite:
 pytest -q
 ```
 
-The project includes automated tests covering authentication, rate limiting, input validation, security controls, and other gateway functionality.
+The test suite covers authentication, authorization, rate limiting, input validation, prompt security, jailbreak detection, secret detection, firewall policies, and other gateway security functionality.
+
+## Docker
+
+The project includes Docker support for running the gateway with its supporting services.
+
+Build the application:
+
+```powershell
+docker compose build
+```
+
+Start the services:
+
+```powershell
+docker compose up
+```
+
+Docker Compose can be used to run the application together with PostgreSQL and Redis.
+
+## Documentation
+
+Project documentation includes:
+
+* `README.md` — Project overview and setup
+* `API_DOCUMENTATION.md` — API reference
+* `docs/ARCHITECTURE.md` — Security architecture
+* `tests/` — Automated security and integration tests
+
+## Project Objectives
+
+The main objectives of the LLM Security Gateway are:
+
+1. Protect LLM applications from common security threats.
+2. Authenticate and authorize API clients securely.
+3. Detect malicious or suspicious prompts.
+4. Prevent credential and secret leakage.
+5. Filter unsafe model outputs.
+6. Maintain security audit records.
+7. Monitor gateway activity.
+8. Correlate security incidents for investigation.
+9. Provide a modular security architecture that can be extended with additional controls.
 
 ## Future Improvements
 
-* Docker containerization
-* CI/CD pipeline
+Potential future enhancements include:
+
+* CI/CD pipeline integration
 * JWT/OAuth authentication
-* Advanced prompt injection detection
-* Distributed rate limiting
-* Production deployment configuration
+* Advanced ML-based threat detection
+* External threat intelligence integrations
+* Distributed production deployment
+* Advanced security dashboards
+* Cloud deployment and centralized monitoring
 
 ## Author
 
 **Sumit Panday**
 
 Cyber Security Internship Project
+
+B.Tech CSE Cyber Security
 
 **Organization:** Zaalima Development Pvt Ltd
 
