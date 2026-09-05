@@ -4,6 +4,15 @@ An enterprise-focused security gateway built with FastAPI to protect LLM and Gen
 
 The gateway provides multiple security layers for authentication, authorization, request validation, prompt protection, secret detection, threat intelligence, output filtering, auditing, monitoring, and security incident correlation.
 
+## Project Information
+
+**Project Title:** Enterprise LLM & GenAI Security Gateway  
+**Student Name:** Sumit Panday  
+**Course / Branch:** B.Tech. CSE (Cyber Security)  
+**Internship Company:** Zaalima Development Pvt. Ltd.  
+**Repository:** https://github.com/sumitpanday11/LLM-SECURITY-GATEWAY.git  
+**Branch:** sumit
+
 ## Features
 
 ### Authentication & Authorization
@@ -351,6 +360,10 @@ pytest -q
 ```
 
 The test suite covers authentication, authorization, rate limiting, input validation, prompt security, jailbreak detection, secret detection, firewall policies, and other gateway security functionality.
+
+### Final Testing Result
+
+✅ **112 tests passed**
 
 ## Docker
 
